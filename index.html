@@ -122,14 +122,18 @@ canvas{display:block;border-radius:2px;}
 <script>
 /* ===================== Konstanten / Datendefinitionen ===================== */
 const TERRAIN = {
-  STRASSE: {cost:1, def:0, color:'#7a6a48', icon:'▬', name:'Straße'},
-  WIESE:   {cost:2, def:1, color:'#4d6a3c', icon:'❈', name:'Wiese'},
-  FELD:    {cost:3, def:1, color:'#7c7a3a', icon:'≡', name:'Feld'},
-  WALD:    {cost:4, def:3, color:'#294a2c', icon:'♣', name:'Wald'},
-  GEBIRGE: {cost:8, def:5, color:'#5c5548', icon:'▲', name:'Gebirge'}
+  STRASSE:  {cost:1, def:0,  heal:0, color:'#7a6a48', icon:'▬', name:'Straße'},
+  WIESE:    {cost:2, def:1,  heal:0, color:'#4d6a3c', icon:'❈', name:'Wiese'},
+  FELD:     {cost:3, def:1,  heal:0, color:'#7c7a3a', icon:'≡', name:'Feld'},
+  WALD:     {cost:4, def:3,  heal:0, color:'#294a2c', icon:'♣', name:'Wald'},
+  GEBIRGE:  {cost:8, def:5,  heal:0, color:'#5c5548', icon:'▲', name:'Gebirge'},
+  DORF:     {cost:1, def:1,  heal:2, color:'#caa457', icon:'⌂', name:'Dorfplatz'},
+  WACHTURM: {cost:1, def:6,  heal:0, color:'#6b5c42', icon:'♜', name:'Wachturm'},
+  BURG:     {cost:1, def:10, heal:3, color:'#9a8560', icon:'♛', name:'Burghof'}
 };
 const WEAPON_TRIANGLE = { SCHWERT:'AXT', AXT:'SPEER', SPEER:'SCHWERT' }; // Schlüssel schlägt Wert
 const WEAPON_LETTER = { SCHWERT:'S', AXT:'A', SPEER:'P' };
+const WEAPON_NAME = { SCHWERT:'Schwert', AXT:'Axt', SPEER:'Speer' };
 const WEAPON_COLOR = { SCHWERT:'#8fa8c9', AXT:'#c98f6b', SPEER:'#a7c98f' };
 const WEAPON_TRIANGLE_BONUS = { hit:12, dmg:2 }; // konfigurierbar (Spec: 10-15 / 1-2)
 const FLANK_BONUS = { hit:10, dmg:2 }; // pro zusätzlichem angrenzenden Verbündeten am Ziel (konfigurierbar, Erweiterung über die Spec hinaus)
@@ -288,6 +292,7 @@ let game = null;
 let screen = 'world'; // 'world' | 'confirm' | 'battle'
 let pendingLocation = null;
 let battle = null;
+let modalQueue = []; // Warteschlange für Dialogboxen (neue Kämpfer, Aufträge, Erfolg)
 
 function initGame(){
   const usedNames = new Set();
@@ -304,8 +309,17 @@ function initGame(){
     firstAlly:{ unit: makeFirstAllyUnit(), joined:false, active:false, permanent:false },
     secondAlly:{ unit: makeSecondAllyUnit(), joined:false },
     world:{ villages, camps, castles, activeCastle:0 },
+    offensive:{
+      unlocked:false, completed:false,
+      camps:[
+        {id:'sup0', idx:0, name:'Versorgungslager 1', count:10, level:10, mixed:true,  cleared:false},
+        {id:'sup1', idx:1, name:'Versorgungslager 2', count:15, level:10, mixed:false, cleared:false},
+        {id:'sup2', idx:2, name:'Versorgungslager 3', count:15, level:15, mixed:false, cleared:false}
+      ]
+    },
     log:[]
   };
+  modalQueue.length = 0;
   logMsg('Fünf Söldner brechen von der Hauptstadt auf. Zwei Aufträge liegen an: die Dörfer im Westen schützen und die Nordgrenze halten.');
   screen='world'; pendingLocation=null; battle=null;
 }
@@ -314,11 +328,18 @@ function logMsg(text){
   game.log.unshift(text);
   if(game.log.length>150) game.log.length=150;
 }
+function queueModal(text, onClose, action){
+  modalQueue.push({text, onClose: onClose||null, action: action||'dismiss'});
+}
 
 /* ===================== Verbündeten-Logik ===================== */
 function grantFirstAllyIfNeeded(){
   const a = game.firstAlly;
-  if(!a.joined){ a.joined=true; a.active=true; logMsg(`${a.unit.name} schließt sich als Verbündeter der Truppe an.`); }
+  if(!a.joined){
+    a.joined=true; a.active=true;
+    logMsg(`${a.unit.name} schließt sich als Verbündeter der Truppe an.`);
+    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`);
+  }
   else if(!a.active && !a.permanent){ a.active=true; logMsg(`${a.unit.name} kehrt zur Truppe zurück.`); }
 }
 function allyLeavesOnCastleDefense(){
@@ -334,13 +355,57 @@ function checkAllyPermanent(){
 }
 function grantSecondAlly(){
   const a = game.secondAlly;
-  if(!a.joined){ a.joined=true; logMsg(`${a.unit.name} schließt sich der Truppe an.`); }
+  if(!a.joined){
+    a.joined=true;
+    logMsg(`${a.unit.name} schließt sich der Truppe an.`);
+    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`);
+  }
 }
 function getActivePlayerRoster(){
   const list=[...game.mercs];
   if(game.firstAlly.joined && game.firstAlly.active) list.push(game.firstAlly.unit);
   if(game.secondAlly.joined) list.push(game.secondAlly.unit);
   return list;
+}
+function getStrongestPartyLevel(){
+  const roster = getActivePlayerRoster();
+  if(!roster.length) return 1;
+  return Math.max(...roster.map(u=>u.level));
+}
+function createLeveledMerc(level, usedNames){
+  const n = randomName(usedNames);
+  const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
+  const bonus = level-1;
+  const maxHp = randInt(15,25)+bonus*3;
+  return {
+    id:'king'+Date.now()+randInt(0,999), name:n.name, gender:n.gender, team:'player', isAlly:false,
+    weapon, level, rank:'Söldner',
+    atk:randInt(1,10)+bonus, def:randInt(1,10)+bonus, spd:randInt(1,10)+bonus, mag:0,
+    maxHp, hp:maxHp, xp:0,
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false
+  };
+}
+function checkCastlesCompleted(){
+  if(game.offensive.unlocked) return;
+  const allSafe = game.world.castles.every(c=>!c.fallen);
+  const frontDone = game.world.activeCastle >= game.world.castles.length;
+  if(allSafe && frontDone){
+    const usedNames = new Set(game.mercs.map(m=>m.name));
+    const merc = createLeveledMerc(10, usedNames);
+    game.mercs.push(merc);
+    logMsg(`${merc.name} (Level 10) schließt sich als Verstärkung des Königs der Truppe an.`);
+    queueModal(
+      `Der König lobt euren Erfolg an der Nordgrenze. Er trägt euch auf, den Gegenschlag zu unterstützen und in feindliches Gebiet vorzudringen. ${merc.name} (Level 10) schließt sich als Verstärkung eurer Truppe an.`,
+      ()=>{ game.offensive.unlocked=true; }
+    );
+  }
+}
+function checkOffensiveCompleted(){
+  if(game.offensive.completed) return;
+  if(game.offensive.camps.every(c=>c.cleared)){
+    game.offensive.completed=true;
+    queueModal('Missionen abgeschlossen! Die Grenzmark ist gesichert und der Gegenschlag erfolgreich.', null, 'restart');
+  }
 }
 
 /* ===================== XP / Level / Beförderung ===================== */
@@ -397,20 +462,84 @@ function siegeLabel(v){
 }
 
 /* ===================== Kampfarena-Generierung ===================== */
+function enemySingular(loc){
+  if(loc.kind==='village' || loc.kind==='camp') return 'Bandit';
+  if(loc.kind==='castle') return loc.ref.fallen ? 'Verteidiger' : 'Belagerer';
+  if(loc.kind==='supply') return 'Soldat';
+  return 'Gegner';
+}
+function enemyPlural(loc){
+  if(loc.kind==='village' || loc.kind==='camp') return 'Banditen';
+  if(loc.kind==='castle') return loc.ref.fallen ? 'Verteidiger' : 'Belagerer';
+  if(loc.kind==='supply') return 'Soldaten';
+  return 'Gegner';
+}
+function getEnemyGroups(loc){
+  if(loc.kind==='village') return [{count:5, level:1, weapons:['AXT']}];
+  if(loc.kind==='camp'){ const n=[8,10,12][loc.ref.idx]; return [{count:n, level:1, weapons:['AXT']}]; }
+  if(loc.kind==='castle'){
+    if(loc.ref.fallen){
+      return [
+        {count:10, level:5, weapons:['SCHWERT','SPEER']},
+        {count:6, level:getStrongestPartyLevel(), weapons:['SCHWERT','AXT','SPEER']}
+      ];
+    }
+    return [{count:10, level:5, weapons:['SCHWERT','SPEER']}];
+  }
+  if(loc.kind==='supply'){
+    return [{count:loc.ref.count, level:loc.ref.level, weapons: loc.ref.mixed ? ['SCHWERT','AXT','SPEER'] : ['SCHWERT']}];
+  }
+  return [];
+}
 function getEncounterInfo(loc){
-  if(loc.kind==='village') return {count:5, level:1, label:'Banditen'};
-  if(loc.kind==='camp'){ const n=[8,10,12][loc.ref.idx]; return {count:n, level:1, label:'Banditen'}; }
-  if(loc.kind==='castle') return {count:10, level:5, label:'Belagerer'};
+  const groups = getEnemyGroups(loc);
+  const count = groups.reduce((a,g)=>a+g.count,0);
+  const levels = [...new Set(groups.map(g=>g.level))].sort((a,b)=>a-b);
+  return { count, levelText: levels.join(' / '), label: enemyPlural(loc) };
+}
+
+function carveRoad(grid, size, rng){
+  // Zeichnet einen zusammenhängenden Straßenpfad von Süden nach Norden
+  // (echter Weg statt zufällig verstreuter Einzelfelder).
+  let x = Math.floor(rng()*size), y = size-1;
+  grid[y][x] = 'STRASSE';
+  let steps = 0;
+  while(y>0 && steps < size*6){
+    steps++;
+    const moves=[];
+    moves.push([0,-1,3]);
+    if(x>0) moves.push([-1,0,1]);
+    if(x<size-1) moves.push([1,0,1]);
+    const total = moves.reduce((a,m)=>a+m[2],0);
+    let r = rng()*total, chosen=moves[0];
+    for(const m of moves){ if(r<m[2]){ chosen=m; break; } r-=m[2]; }
+    x = Math.max(0, Math.min(size-1, x+chosen[0]));
+    y = Math.max(0, Math.min(size-1, y+chosen[1]));
+    grid[y][x] = 'STRASSE';
+  }
+}
+function placeSpecialCluster(grid, size, rng, rows, burgCount, towerCount){
+  const cand=[];
+  for(const y of rows) for(let x=0;x<size;x++) cand.push([x,y]);
+  for(let i=cand.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [cand[i],cand[j]]=[cand[j],cand[i]]; }
+  const chosen = cand.slice(0, burgCount+towerCount);
+  const tiles=[];
+  chosen.forEach(([x,y],idx)=>{
+    const type = idx<burgCount ? 'BURG' : 'WACHTURM';
+    grid[y][x]=type;
+    tiles.push({x,y,type});
+  });
+  return tiles;
 }
 
 function generateBattle(loc){
-  const seed = hashStr(loc.kind+'-'+loc.ref.id);
+  const seed = hashStr(loc.kind+'-'+loc.ref.id+'-'+(loc.ref.fallen?'fallen':'aktiv'));
   const rng = mulberry32(seed);
   const size = GRID_SIZE;
   let weights;
-  if(loc.kind==='village') weights=[['STRASSE',10],['WIESE',40],['FELD',30],['WALD',15],['GEBIRGE',5]];
-  else if(loc.kind==='camp') weights=[['STRASSE',5],['WIESE',20],['FELD',10],['WALD',55],['GEBIRGE',10]];
-  else weights=[['STRASSE',30],['WIESE',25],['FELD',10],['WALD',10],['GEBIRGE',25]];
+  if(loc.kind==='village' || loc.kind==='supply') weights=[['WIESE',45],['FELD',30],['WALD',20],['GEBIRGE',5]];
+  else if(loc.kind==='camp') weights=[['WIESE',20],['FELD',15],['WALD',55],['GEBIRGE',10]];
+  else weights=[['WIESE',35],['FELD',15],['WALD',15],['GEBIRGE',35]]; // Burg
   const totalW = weights.reduce((a,[,w])=>a+w,0);
   function pickTerrain(){
     let r=rng()*totalW;
@@ -425,23 +554,48 @@ function generateBattle(loc){
       if(grid[y][x]==='GEBIRGE') grid[y][x]='WIESE';
     }
   }
+  // Verbundene Straßen statt zufälliger Einzelfelder
+  carveRoad(grid,size,rng);
+  if(loc.kind==='castle') carveRoad(grid,size,rng);
+
+  // Besondere Felder je nach Einsatzort
+  let specialTiles = [];
+  if(loc.kind==='village'){
+    const midRow = Math.floor(size/2);
+    const dx = Math.floor(rng()*size);
+    grid[midRow][dx] = 'DORF';
+  } else if(loc.kind==='camp'){
+    specialTiles = placeSpecialCluster(grid,size,rng,[0,1,2],0,3);
+  } else if(loc.kind==='castle'){
+    if(loc.ref.fallen){
+      // Burg ist in Feindeshand: Burghof + 5 Wachtürme im Norden, von der KI umkämpft.
+      specialTiles = placeSpecialCluster(grid,size,rng,[0,1,2],1,5);
+    } else {
+      // Verteidigung: Burghof + 5 Wachtürme im Süden als eigene Rückzugs-/Heilzone.
+      placeSpecialCluster(grid,size,rng,[size-3,size-2,size-1],1,5);
+    }
+  }
 
   const roster = getActivePlayerRoster();
   roster.forEach(u=>{ u.alive=true; u.hp=u.maxHp; u.hasMoved=false; u.hasActed=false; u.team='player'; });
 
-  const info = getEncounterInfo(loc);
+  const groups = getEnemyGroups(loc);
   const enemies=[];
-  for(let i=0;i<info.count;i++){
-    const w = loc.kind==='castle' ? (rng()<0.5?'SCHWERT':'SPEER') : 'AXT';
-    const bonus = info.level-1;
-    const maxHp = Math.floor(rng()*11)+15+bonus*3;
-    enemies.push({
-      id:'e'+i, name:(loc.kind==='castle'?'Belagerer':'Bandit')+' '+(i+1),
-      team:'enemy', isAlly:false, gender: rng()<0.5?'m':'w', weapon:w, level:info.level, rank:'Gegner',
-      atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0,
-      maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
-    });
-  }
+  let counter=0;
+  groups.forEach(g=>{
+    for(let i=0;i<g.count;i++){
+      const w = g.weapons[Math.floor(rng()*g.weapons.length)];
+      const bonus = g.level-1;
+      const maxHp = Math.floor(rng()*11)+15+bonus*3;
+      enemies.push({
+        id:'e'+counter, name: enemySingular(loc)+' '+(counter+1),
+        team:'enemy', isAlly:false, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank:'Gegner',
+        atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0,
+        maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
+      });
+      counter++;
+    }
+  });
 
   function findSpawnTiles(rows, count){
     const cand=[];
@@ -455,7 +609,7 @@ function generateBattle(loc){
   enemies.forEach((e,i)=>{ const s=eSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
 
   battle = {
-    loc, grid, size, units:[...roster,...enemies],
+    loc, grid, size, units:[...roster,...enemies], specialTiles,
     phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
     turnNumber:1, enemyIdx:0, outcome:null
   };
@@ -558,14 +712,16 @@ function checkBattleEnd(){
 }
 
 /* Spieler-Interaktion */
-function adjacentEnemies(u){
-  const targets=[];
+function adjacentOpponents(u){
+  const oppTeam = u.team==='enemy' ? 'player' : 'enemy';
+  const res=[];
   [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy])=>{
     const t=unitAt(u.x+dx,u.y+dy);
-    if(t && t.team==='enemy') targets.push(t);
+    if(t && t.team===oppTeam) res.push(t);
   });
-  return targets;
+  return res;
 }
+function adjacentEnemies(u){ return adjacentOpponents(u); }
 function selectUnit(u){
   battle.selected=u;
   battle.moveRange=computeReachable(u);
@@ -669,6 +825,38 @@ function runEnemyStep(){
   setTimeout(runEnemyStep, 400);
 }
 function performEnemyAction(enemy){
+  // 1) Steht die Einheit bereits auf einem besonderen Feld (Wachturm/Burg): halten.
+  const standingOn = (battle.specialTiles||[]).find(t=>t.x===enemy.x && t.y===enemy.y);
+  const adjNow = adjacentOpponents(enemy);
+  if(standingOn){
+    if(adjNow.length){ resolveCombat(enemy, adjNow[0]); }
+    else { logMsg(`${enemy.name} hält ${TERRAIN[standingOn.type].name}.`); }
+    return;
+  }
+  // 2) Solange unbesetzte Wachtürme/Burg existieren und kein Gegner direkt angrenzt: dorthin vorrücken.
+  const unclaimed = (battle.specialTiles||[]).filter(t=>!unitAt(t.x,t.y));
+  if(!adjNow.length && unclaimed.length){
+    let nearest=null, bestDist=Infinity;
+    unclaimed.forEach(t=>{ const d=Math.abs(t.x-enemy.x)+Math.abs(t.y-enemy.y); if(d<bestDist){bestDist=d; nearest=t;} });
+    const reachable = computeReachable(enemy);
+    let dest=null;
+    const directKey = nearest.x+','+nearest.y;
+    if(reachable[directKey]!==undefined){ dest=[nearest.x,nearest.y]; }
+    else {
+      let bestScore=Infinity;
+      Object.keys(reachable).forEach(k=>{
+        const [x,y]=k.split(',').map(Number);
+        const score=Math.abs(nearest.x-x)+Math.abs(nearest.y-y);
+        if(score<bestScore){bestScore=score;dest=[x,y];}
+      });
+    }
+    if(dest && (dest[0]!==enemy.x || dest[1]!==enemy.y)){ enemy.x=dest[0]; enemy.y=dest[1]; }
+    const stillAdj = adjacentOpponents(enemy);
+    if(stillAdj.length){ resolveCombat(enemy, stillAdj[0]); }
+    else { logMsg(`${enemy.name} rückt auf ${TERRAIN[nearest.type].name} vor.`); }
+    return;
+  }
+  // 3) Standard reaktive Zonen-KI
   const reachable = computeReachable(enemy);
   const players = battle.units.filter(u=>u.team==='player' && u.alive);
   let best=null; // {cost, tile:[x,y], target}
@@ -687,8 +875,19 @@ function performEnemyAction(enemy){
   }
   resolveCombat(enemy, best.target);
 }
+function applyTileHealing(){
+  battle.units.filter(u=>u.alive).forEach(u=>{
+    const t = TERRAIN[battle.grid[u.y][u.x]];
+    if(t.heal){
+      const before = u.hp;
+      u.hp = Math.min(u.maxHp, u.hp+t.heal);
+      if(u.hp>before) logMsg(`${u.name} heilt ${u.hp-before} HP auf ${t.name}.`);
+    }
+  });
+}
 function finishEnemyPhase(){
   battle.units.forEach(u=>{ u.hasMoved=false; u.hasActed=false; });
+  applyTileHealing();
   battle.phase='player'; battle.mode='idle'; battle.turnNumber++; battle.enemyIdx=0;
   render();
 }
@@ -718,16 +917,36 @@ function endBattle(outcome){
       logMsg(`Der Angriff auf ${loc.ref.name} ist gescheitert.`);
     }
   } else if(loc.kind==='castle'){
-    if(win){
-      loc.ref.siege=0;
-      logMsg(`${loc.ref.name} wurde erfolgreich verteidigt.`);
-      allyLeavesOnCastleDefense();
+    if(loc.ref.fallen){
+      if(win){
+        loc.ref.fallen=false; loc.ref.siege=0;
+        logMsg(`${loc.ref.name} wurde zurückerobert!`);
+        checkCastlesCompleted();
+      } else {
+        logMsg(`Der Versuch, ${loc.ref.name} zurückzuerobern, ist gescheitert.`);
+      }
     } else {
-      logMsg(`Die Verteidigung von ${loc.ref.name} ist gescheitert.`);
-      advanceCastleSiege(randInt(30,45));
+      if(win){
+        loc.ref.siege=0;
+        logMsg(`${loc.ref.name} wurde erfolgreich verteidigt.`);
+        allyLeavesOnCastleDefense();
+        checkCastlesCompleted();
+      } else {
+        logMsg(`Die Verteidigung von ${loc.ref.name} ist gescheitert.`);
+        advanceCastleSiege(randInt(30,45));
+      }
+    }
+  } else if(loc.kind==='supply'){
+    if(win){
+      loc.ref.cleared=true;
+      logMsg(`${loc.ref.name} wurde ausgehoben.`);
+      checkOffensiveCompleted();
+    } else {
+      logMsg(`Der Angriff auf ${loc.ref.name} ist gescheitert.`);
     }
   }
-  if(loc.kind!=='castle'){
+  // Weltzeit schreitet an der aktiven Frontburg voran, außer man kämpft dort gerade selbst.
+  if(!(loc.kind==='castle' && !loc.ref.fallen)){
     advanceCastleSiege(randInt(25,34));
   }
   game.day++;
@@ -747,6 +966,7 @@ function render(){
   if(screen==='battle') html += renderBattleScreen();
   html += '</div></div>';
   if(screen==='confirm') html += renderConfirmModal();
+  if(screen==='world' && modalQueue.length) html += renderAnnouncementModal();
   appEl.innerHTML = html;
   attachHandlers();
   if(screen==='battle') drawBattleCanvas();
@@ -777,7 +997,7 @@ function unitCardHtml(u, opts){
       <span class="name">${u.name}</span>
       <span class="badge weapon-${u.weapon}">${WEAPON_LETTER[u.weapon]}</span>
     </div>
-    <div class="rank">${u.rank} · Lvl ${u.level}${dead?' · Kampfunfähig':''}</div>
+    <div class="rank">${u.rank} · Lvl ${u.level} · ${WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
     <div class="statline">
       <span>ANG ${u.atk}</span><span>VER ${u.def}</span><span>GES ${u.spd}</span><span>HP ${Math.max(0,u.hp)}/${u.maxHp}</span>
     </div>
@@ -815,13 +1035,16 @@ function renderWorldScreen(){
   html += '<div class="map-region"><h2>Nordgrenze <span class="hint">Burgen werden nacheinander belagert</span></h2><div class="node-row">';
   w.castles.forEach((c,i)=>{
     if(c.fallen){
-      html += `<div class="node danger"><div class="n-name">${c.name}</div><div class="n-state">Gefallen</div></div>`;
+      html += `<div class="node clickable danger" data-action="select-loc" data-kind="castle" data-idx="${i}">
+        <div class="n-name">${c.name}</div><div class="n-state">Gefallen — zurückerobern?</div></div>`;
     } else if(i===w.activeCastle){
       html += `<div class="node clickable" data-action="select-loc" data-kind="castle" data-idx="${i}">
         <div class="n-name">${c.name}</div>
         <div class="n-state">${siegeLabel(c.siege)}</div>
         <div class="siegebar"><div class="siegebar-inner" style="width:${c.siege}%"></div></div>
       </div>`;
+    } else if(i<w.activeCastle){
+      html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Gesichert</div></div>`;
     } else {
       html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht bedroht</div></div>`;
     }
@@ -848,6 +1071,22 @@ function renderWorldScreen(){
     }
   });
   html += '</div></div>';
+
+  if(game.offensive.unlocked){
+    const nextIdx = game.offensive.camps.findIndex(c=>!c.cleared);
+    html += '<div class="map-region"><h2>Feindliches Territorium <span class="hint">Versorgungslager werden nacheinander ausgehoben</span></h2><div class="node-row">';
+    game.offensive.camps.forEach((c,i)=>{
+      if(c.cleared){
+        html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Ausgehoben</div></div>`;
+      } else if(i===nextIdx){
+        html += `<div class="node clickable" data-action="select-loc" data-kind="supply" data-idx="${i}">
+          <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+      } else {
+        html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht erreichbar</div></div>`;
+      }
+    });
+    html += '</div></div>';
+  }
   return html;
 }
 
@@ -857,12 +1096,23 @@ function renderConfirmModal(){
   return `<div class="overlay"><div class="modal">
     <h2>${loc.ref.name}</h2>
     <div class="info-line"><span>Gegner</span><span>${info.count} × ${info.label}</span></div>
-    <div class="info-line"><span>Stufe</span><span>${info.level}</span></div>
+    <div class="info-line"><span>Stufe</span><span>${info.levelText}</span></div>
     <div class="info-line"><span>Eigene Kämpfer</span><span>${getActivePlayerRoster().length}</span></div>
     <div class="buttons">
       <button data-action="cancel-loc">Abbrechen</button>
       <button class="primary" data-action="confirm-loc">Einsatz beginnen</button>
     </div>
+  </div></div>`;
+}
+
+function renderAnnouncementModal(){
+  const m = modalQueue[0];
+  const label = m.action==='restart' ? 'Neu beginnen' : 'Weiter';
+  const title = m.action==='restart' ? 'Erfolg!' : 'Neuigkeiten';
+  return `<div class="overlay"><div class="modal">
+    <h2>${title}</h2>
+    <p style="color:var(--text-dim);line-height:1.5;">${m.text}</p>
+    <div class="buttons"><button class="primary" data-action="modal-continue">${label}</button></div>
   </div></div>`;
 }
 
@@ -875,13 +1125,16 @@ function renderBattleScreen(){
   </div>`;
   html += '<div id="battle-side">';
 
+  const presentTypes = new Set();
+  for(let y=0;y<battle.size;y++) for(let x=0;x<battle.size;x++) presentTypes.add(battle.grid[y][x]);
   html += `<div class="panel-box"><h3>Gelände</h3><div class="legend">`;
   Object.entries(TERRAIN).forEach(([k,t])=>{
-    html += `<span><i style="background:${t.color}"></i>${t.name} (${t.cost} BP, +${t.def} Vert.)</span>`;
+    if(!presentTypes.has(k)) return;
+    html += `<span><i style="background:${t.color}"></i>${t.name} (${t.cost} BP, +${t.def} Vert.${t.heal?', +'+t.heal+' Heilung/Runde':''})</span>`;
   });
   html += `</div></div>`;
 
-  html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen.</div></div>`;
+  html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen.${battle.specialTiles && battle.specialTiles.length ? ' Gegner versuchen zu Beginn, Wachtürme/Burg zu besetzen und zu halten — wer zuerst dort ist, sichert sich den Verteidigungsbonus.' : ''}</div></div>`;
   html += `<div class="panel-box"><h3>Umzingelung</h3><div class="help-text" style="margin-bottom:0;">Steht neben dem Angreifer noch mind. ein weiterer Verbündeter direkt am Ziel an, steigen Trefferchance (+${FLANK_BONUS.hit} pro zusätzlichem Angreifer) und Schaden (+${FLANK_BONUS.dmg}). Gilt für beide Seiten.</div></div>`;
 
   if(battle.selected){
@@ -988,7 +1241,10 @@ function attachHandlers(){
       else if(action==='select-loc'){
         const kind = el.getAttribute('data-kind');
         const idx = Number(el.getAttribute('data-idx'));
-        const ref = kind==='village' ? game.world.villages[idx] : kind==='camp' ? game.world.camps[idx] : game.world.castles[idx];
+        const ref = kind==='village' ? game.world.villages[idx]
+          : kind==='camp' ? game.world.camps[idx]
+          : kind==='castle' ? game.world.castles[idx]
+          : game.offensive.camps[idx];
         pendingLocation = {kind, ref};
         screen='confirm';
         render();
@@ -999,6 +1255,14 @@ function attachHandlers(){
       else if(action==='end-phase'){ endPlayerPhase(); }
       else if(action==='retreat'){ if(confirm('Wirklich zurückziehen? Dies zählt als Niederlage für die Weltkonsequenzen.')) retreatBattle(); }
       else if(action==='end-battle'){ endBattle(battle.outcome); }
+      else if(action==='modal-continue'){
+        const m = modalQueue.shift();
+        if(m){
+          if(m.action==='restart'){ initGame(); }
+          else if(m.onClose){ m.onClose(); }
+        }
+        render();
+      }
     });
   });
 }
