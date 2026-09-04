@@ -968,6 +968,10 @@ function endBattle(outcome){
         loc.ref.siege=0;
         logMsg(`${loc.ref.name} wurde erfolgreich verteidigt.`);
         allyLeavesOnCastleDefense();
+        if(game.world.activeCastle === loc.ref.idx){
+          game.world.activeCastle = loc.ref.idx+1;
+          logMsg(`Die Front rückt weiter vor: ${loc.ref.name} ist gesichert.`);
+        }
         checkCastlesCompleted();
       } else {
         logMsg(`Die Verteidigung von ${loc.ref.name} ist gescheitert.`);
