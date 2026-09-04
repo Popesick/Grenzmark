@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chronik der Grenzmark – Prototyp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#131829;
+  --bg-alt:#0e1220;
+  --panel:#1c2440;
+  --panel-alt:#242e50;
+  --line:#3a4570;
+  --line-soft:#2a3358;
+  --text:#e7e2cf;
+  --text-dim:#98a0c4;
+  --gold:#c6a153;
+  --gold-dim:#8a7539;
+  --danger:#a3453b;
+  --danger-dim:#6e332d;
+  --success:#5f8f61;
+  --success-dim:#3f5f41;
+  --info:#5b7aa6;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Spectral',serif;height:100%;}
+#app{min-height:100vh;display:flex;flex-direction:column;}
+h1,h2,h3,.display{font-family:'Cinzel',serif;letter-spacing:.02em;font-weight:600;color:var(--gold);}
+button{font-family:'Spectral',serif;cursor:pointer;border-radius:3px;border:1px solid var(--line);background:var(--panel-alt);color:var(--text);padding:8px 14px;font-size:14px;transition:background .15s,border-color .15s;}
+button:hover:not(:disabled){background:var(--line-soft);border-color:var(--gold-dim);}
+button:disabled{opacity:.35;cursor:default;}
+button.primary{background:var(--gold-dim);border-color:var(--gold);color:#1a1408;font-weight:600;}
+button.primary:hover:not(:disabled){background:var(--gold);}
+button.danger{border-color:var(--danger);}
+button.danger:hover:not(:disabled){background:var(--danger-dim);}
+
+/* header */
+#header{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;background:var(--bg-alt);border-bottom:1px solid var(--line);}
+#header h1{margin:0;font-size:21px;}
+#header .sub{color:var(--text-dim);font-size:13px;margin-top:2px;}
+#header .right{display:flex;align-items:center;gap:14px;}
+.day-badge{font-family:'Cinzel',serif;color:var(--gold);border:1px solid var(--line);padding:5px 12px;border-radius:3px;font-size:13px;}
+
+/* layout */
+#main{flex:1;display:flex;min-height:0;}
+#sidebar{width:290px;flex:0 0 290px;background:var(--panel);border-right:1px solid var(--line);padding:14px;overflow-y:auto;}
+#content{flex:1;padding:20px;overflow-y:auto;position:relative;}
+
+.roster-card{background:var(--panel-alt);border:1px solid var(--line-soft);border-radius:4px;padding:9px 10px;margin-bottom:8px;}
+.roster-card.dead{opacity:.4;}
+.roster-card .row1{display:flex;justify-content:space-between;align-items:baseline;}
+.roster-card .name{font-weight:600;font-size:14px;}
+.roster-card .rank{font-size:11px;color:var(--text-dim);}
+.roster-card .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid var(--line);color:var(--text-dim);margin-left:5px;}
+.roster-card .badge.weapon-SCHWERT{border-color:#8fa8c9;color:#8fa8c9;}
+.roster-card .badge.weapon-AXT{border-color:#c98f6b;color:#c98f6b;}
+.roster-card .badge.weapon-SPEER{border-color:#a7c98f;color:#a7c98f;}
+.statline{display:flex;gap:8px;font-size:11px;color:var(--text-dim);margin-top:4px;flex-wrap:wrap;}
+.hpbar-outer,.xpbar-outer{height:6px;border-radius:3px;background:#111528;overflow:hidden;margin-top:5px;border:1px solid var(--line-soft);}
+.hpbar-inner{height:100%;background:linear-gradient(90deg,var(--success),#7fb37f);}
+.xpbar-inner{height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));}
+.portrait-note{font-size:9px;color:var(--text-dim);opacity:.6;font-style:italic;}
+
+#logbox{margin-top:14px;border-top:1px solid var(--line-soft);padding-top:10px;}
+#logbox h3{font-size:12px;margin:0 0 6px;color:var(--text-dim);text-transform:none;}
+#logbox .entry{font-size:12px;color:var(--text-dim);margin-bottom:5px;line-height:1.4;}
+#logbox .entry:first-child{color:var(--text);}
+
+/* world map */
+.map-region{margin-bottom:26px;}
+.map-region h2{font-size:15px;margin:0 0 12px;font-weight:600;}
+.map-region h2 .hint{color:var(--text-dim);font-size:12px;font-family:'Spectral',serif;font-weight:400;margin-left:8px;}
+.node-row{display:flex;gap:12px;flex-wrap:wrap;}
+.node{width:150px;background:var(--panel-alt);border:1px solid var(--line-soft);border-radius:4px;padding:12px;text-align:left;}
+.node.clickable{cursor:pointer;border-color:var(--gold-dim);}
+.node.clickable:hover{border-color:var(--gold);background:var(--line-soft);}
+.node.locked{opacity:.45;}
+.node.success{border-color:var(--success);}
+.node.danger{border-color:var(--danger);}
+.node .n-name{font-family:'Cinzel',serif;font-size:13px;color:var(--gold);margin-bottom:5px;}
+.node .n-state{font-size:12px;color:var(--text-dim);}
+.node .siegebar{height:5px;border-radius:3px;background:#111528;margin-top:8px;overflow:hidden;border:1px solid var(--line-soft);}
+.node .siegebar-inner{height:100%;background:linear-gradient(90deg,var(--success),var(--danger));}
+.capital-node{width:100%;max-width:340px;margin:0 auto;text-align:center;padding:20px;background:radial-gradient(ellipse at center,#26305a,#1a2140);border:1px solid var(--gold-dim);border-radius:6px;}
+.capital-node .n-name{font-size:16px;}
+
+/* modal */
+.overlay{position:fixed;inset:0;background:rgba(6,8,16,.72);display:flex;align-items:center;justify-content:center;z-index:50;}
+.modal{background:var(--panel);border:1px solid var(--gold-dim);border-radius:6px;padding:26px 30px;width:380px;max-width:90vw;}
+.modal h2{margin-top:0;}
+.modal .info-line{display:flex;justify-content:space-between;font-size:13px;color:var(--text-dim);margin:6px 0;border-bottom:1px solid var(--line-soft);padding-bottom:6px;}
+.modal .buttons{display:flex;gap:10px;margin-top:20px;justify-content:flex-end;}
+
+/* battle */
+#battle-wrap{display:flex;gap:18px;align-items:flex-start;}
+#battle-canvas-holder{background:var(--bg-alt);border:1px solid var(--line);border-radius:4px;padding:8px;position:relative;}
+canvas{display:block;border-radius:2px;}
+#battle-side{width:300px;flex:0 0 300px;}
+.panel-box{background:var(--panel-alt);border:1px solid var(--line-soft);border-radius:4px;padding:12px;margin-bottom:12px;}
+.panel-box h3{margin:0 0 8px;font-size:13px;color:var(--gold);font-family:'Cinzel',serif;}
+.legend{display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--text-dim);}
+.legend span{display:flex;align-items:center;gap:4px;}
+.legend i{width:10px;height:10px;display:inline-block;border-radius:2px;}
+.phase-banner{font-family:'Cinzel',serif;font-size:14px;color:var(--gold);text-align:center;padding:6px;border:1px solid var(--line-soft);border-radius:4px;margin-bottom:12px;background:var(--panel);}
+.battle-log{max-height:150px;overflow-y:auto;font-size:12px;color:var(--text-dim);}
+.battle-log .entry{margin-bottom:4px;border-left:2px solid var(--line-soft);padding-left:6px;}
+.action-row{display:flex;gap:8px;flex-wrap:wrap;}
+.result-overlay{position:absolute;inset:0;background:rgba(6,8,16,.85);display:flex;align-items:center;justify-content:center;border-radius:4px;}
+.result-box{background:var(--panel);border:1px solid var(--gold);border-radius:6px;padding:26px 34px;text-align:center;}
+.result-box.victory{border-color:var(--success);}
+.result-box.defeat{border-color:var(--danger);}
+.result-box h2{font-size:22px;margin-top:0;}
+
+.help-text{font-size:12px;color:var(--text-dim);line-height:1.5;margin-bottom:14px;}
+.small-note{font-size:11px;color:var(--text-dim);margin-top:8px;font-style:italic;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ===================== Konstanten / Datendefinitionen ===================== */
+const TERRAIN = {
+  STRASSE: {cost:1, def:0, color:'#7a6a48', icon:'▬', name:'Straße'},
+  WIESE:   {cost:2, def:1, color:'#4d6a3c', icon:'❈', name:'Wiese'},
+  FELD:    {cost:3, def:1, color:'#7c7a3a', icon:'≡', name:'Feld'},
+  WALD:    {cost:4, def:3, color:'#294a2c', icon:'♣', name:'Wald'},
+  GEBIRGE: {cost:8, def:5, color:'#5c5548', icon:'▲', name:'Gebirge'}
+};
+const WEAPON_TRIANGLE = { SCHWERT:'AXT', AXT:'SPEER', SPEER:'SCHWERT' }; // Schlüssel schlägt Wert
+const WEAPON_LETTER = { SCHWERT:'S', AXT:'A', SPEER:'P' };
+const WEAPON_COLOR = { SCHWERT:'#8fa8c9', AXT:'#c98f6b', SPEER:'#a7c98f' };
+const WEAPON_TRIANGLE_BONUS = { hit:12, dmg:2 }; // konfigurierbar (Spec: 10-15 / 1-2)
+const FLANK_BONUS = { hit:10, dmg:2 }; // pro zusätzlichem angrenzenden Verbündeten am Ziel (konfigurierbar, Erweiterung über die Spec hinaus)
+const TILE = 32;
+const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
+
+/* ===================== RNG ===================== */
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashStr(s){
+  let h = 1779033703 ^ s.length;
+  for(let i=0;i<s.length;i++){
+    h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return (h ^ (h >>> 16)) >>> 0;
+}
+function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+
+/* ===================== Namen ===================== */
+const MERC_NAMES = ['Alrik','Beren','Cwen','Doran','Elric','Fenna','Gorm','Hilda','Ivar','Joric','Katla','Leif','Morna','Osric','Rurik'];
+function randomName(usedSet){
+  let n;
+  do{ n = MERC_NAMES[randInt(0,MERC_NAMES.length-1)]; } while(usedSet.has(n) && usedSet.size < MERC_NAMES.length);
+  usedSet.add(n);
+  return n;
+}
+
+/* ===================== Einheiten-Erzeugung ===================== */
+function bpForSpeed(spd){ return 8 + Math.floor(spd/10); }
+
+function makeMerc(id, usedNames){
+  const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
+  const maxHp = randInt(15,25);
+  return {
+    id, name: randomName(usedNames), team:'player', isAlly:false,
+    weapon, level:1, rank:'Söldner',
+    atk: randInt(1,10), def: randInt(1,10), spd: randInt(1,10), mag:0,
+    maxHp, hp:maxHp, xp:0,
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false
+  };
+}
+
+function makeFirstAllyUnit(){
+  return { id:'ally1', name:'Roderick', team:'player', isAlly:true,
+    weapon:'AXT', level:1, rank:'Verbündeter',
+    atk:10, def:10, spd:10, mag:0, maxHp:25, hp:25, xp:0,
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false };
+}
+function makeSecondAllyUnit(){
+  return { id:'ally2', name:'Ysolde', team:'player', isAlly:true,
+    weapon:'SPEER', level:5, rank:'Verbündete',
+    atk:15, def:15, spd:15, mag:0, maxHp:35, hp:35, xp:0,
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false };
+}
+
+/* ===================== Weltinitialisierung ===================== */
+let game = null;
+let screen = 'world'; // 'world' | 'confirm' | 'battle'
+let pendingLocation = null;
+let battle = null;
+
+function initGame(){
+  const usedNames = new Set();
+  const mercs = [];
+  for(let i=0;i<5;i++) mercs.push(makeMerc('m'+i, usedNames));
+
+  const villages = [0,1,2].map(i=>({id:'dorf'+i, idx:i, name:'Dorf '+(i+1), liberated:false}));
+  const camps = [0,1,2].map(i=>({id:'lager'+i, idx:i, name:'Banditenlager '+(i+1), visible:false, cleared:false}));
+  const castles = [0,1,2,3,4].map(i=>({id:'burg'+i, idx:i, name:'Burg '+(i+1), siege:0, fallen:false}));
+
+  game = {
+    day:1,
+    mercs,
+    firstAlly:{ unit: makeFirstAllyUnit(), joined:false, active:false, permanent:false },
+    secondAlly:{ unit: makeSecondAllyUnit(), joined:false },
+    world:{ villages, camps, castles, activeCastle:0 },
+    log:[]
+  };
+  logMsg('Fünf Söldner brechen von der Hauptstadt auf. Zwei Aufträge liegen an: die Dörfer im Westen schützen und die Nordgrenze halten.');
+  screen='world'; pendingLocation=null; battle=null;
+}
+
+function logMsg(text){
+  game.log.unshift(text);
+  if(game.log.length>150) game.log.length=150;
+}
+
+/* ===================== Verbündeten-Logik ===================== */
+function grantFirstAllyIfNeeded(){
+  const a = game.firstAlly;
+  if(!a.joined){ a.joined=true; a.active=true; logMsg(`${a.unit.name} schließt sich als Verbündeter der Truppe an.`); }
+  else if(!a.active && !a.permanent){ a.active=true; logMsg(`${a.unit.name} kehrt zur Truppe zurück.`); }
+}
+function allyLeavesOnCastleDefense(){
+  const a = game.firstAlly;
+  if(a.joined && a.active && !a.permanent){ a.active=false; logMsg(`${a.unit.name} verlässt die Truppe, um die Verteidigung der Burg zu unterstützen.`); }
+}
+function checkAllyPermanent(){
+  const a = game.firstAlly;
+  if(!a.joined || a.permanent) return;
+  const v = game.world.villages.every(x=>x.liberated);
+  const c = game.world.camps.every(x=>x.cleared);
+  if(v && c){ a.permanent=true; a.active=true; logMsg(`${a.unit.name} wird dauerhaftes Mitglied der Truppe.`); }
+}
+function grantSecondAlly(){
+  const a = game.secondAlly;
+  if(!a.joined){ a.joined=true; logMsg(`${a.unit.name} schließt sich der Truppe an.`); }
+}
+function getActivePlayerRoster(){
+  const list=[...game.mercs];
+  if(game.firstAlly.joined && game.firstAlly.active) list.push(game.firstAlly.unit);
+  if(game.secondAlly.joined) list.push(game.secondAlly.unit);
+  return list;
+}
+
+/* ===================== XP / Level / Beförderung ===================== */
+function applyXP(unit, amount){
+  if(unit.level>=20 && unit.rank!=='Söldner' && unit.rank!=='Verbündeter' && unit.rank!=='Verbündete'){ /* Hauptmann max */ }
+  if(unit.level>=20 && unit.promoted){ unit.xp=0; return; }
+  unit.xp += amount;
+  while(unit.xp>=100){
+    if(unit.level>=20 && unit.promoted){ unit.xp=0; break; }
+    unit.xp-=100;
+    levelUp(unit);
+    if(unit.level>=20 && unit.promoted){ unit.xp=0; break; }
+  }
+}
+function levelUp(unit){
+  unit.level++;
+  const g=()=>randInt(0,2);
+  unit.atk+=g(); unit.def+=g(); unit.spd+=g();
+  const hpg=g(); unit.maxHp+=hpg; unit.hp=Math.min(unit.maxHp,unit.hp+hpg);
+  logMsg(`${unit.name} erreicht Level ${unit.level}.`);
+  if(unit.level>=20 && !unit.promoted){ promote(unit); }
+}
+function promote(unit){
+  unit.promoted=true;
+  unit.level=1;
+  unit.rank='Hauptmann';
+  const b=()=>randInt(1,5);
+  unit.atk+=b(); unit.def+=b(); unit.spd+=b();
+  const hb=b(); unit.maxHp+=hb; unit.hp=unit.maxHp;
+  logMsg(`${unit.name} wird zum Hauptmann befördert!`);
+}
+
+/* ===================== Weltzeit / Burgen ===================== */
+function advanceCastleSiege(amount){
+  const idx = game.world.activeCastle;
+  if(idx>=game.world.castles.length) return;
+  const castle = game.world.castles[idx];
+  castle.siege = Math.min(100, castle.siege+amount);
+  if(castle.siege>=100){
+    castle.fallen=true;
+    logMsg(`${castle.name} ist gefallen! Umliegendes Land gerät unter feindliche Kontrolle.`);
+    game.world.activeCastle = idx+1;
+    if(game.world.activeCastle>=game.world.castles.length){
+      logMsg('Alle Burgen entlang der Nordgrenze sind gefallen.');
+    }
+  }
+}
+function siegeLabel(v){
+  if(v>=100) return 'Gefallen';
+  if(v>=67) return 'Kurz vor dem Fall';
+  if(v>=34) return 'Stark belagert';
+  if(v>=1) return 'Belagert';
+  return 'Sicher';
+}
+
+/* ===================== Kampfarena-Generierung ===================== */
+function getEncounterInfo(loc){
+  if(loc.kind==='village') return {count:5, level:1, label:'Banditen'};
+  if(loc.kind==='camp'){ const n=[8,10,12][loc.ref.idx]; return {count:n, level:1, label:'Banditen'}; }
+  if(loc.kind==='castle') return {count:10, level:5, label:'Belagerer'};
+}
+
+function generateBattle(loc){
+  const seed = hashStr(loc.kind+'-'+loc.ref.id);
+  const rng = mulberry32(seed);
+  const size = GRID_SIZE;
+  let weights;
+  if(loc.kind==='village') weights=[['STRASSE',10],['WIESE',40],['FELD',30],['WALD',15],['GEBIRGE',5]];
+  else if(loc.kind==='camp') weights=[['STRASSE',5],['WIESE',20],['FELD',10],['WALD',55],['GEBIRGE',10]];
+  else weights=[['STRASSE',30],['WIESE',25],['FELD',10],['WALD',10],['GEBIRGE',25]];
+  const totalW = weights.reduce((a,[,w])=>a+w,0);
+  function pickTerrain(){
+    let r=rng()*totalW;
+    for(const [t,w] of weights){ if(r<w) return t; r-=w; }
+    return weights[0][0];
+  }
+  const grid=[];
+  for(let y=0;y<size;y++){ const row=[]; for(let x=0;x<size;x++) row.push(pickTerrain()); grid.push(row); }
+  // Spawnzonen begehbar halten
+  for(let x=0;x<size;x++){
+    for(const y of [0,1,size-2,size-1]){
+      if(grid[y][x]==='GEBIRGE') grid[y][x]='WIESE';
+    }
+  }
+
+  const roster = getActivePlayerRoster();
+  roster.forEach(u=>{ u.alive=true; u.hp=u.maxHp; u.hasMoved=false; u.hasActed=false; u.team='player'; });
+
+  const info = getEncounterInfo(loc);
+  const enemies=[];
+  for(let i=0;i<info.count;i++){
+    const w = loc.kind==='castle' ? (rng()<0.5?'SCHWERT':'SPEER') : 'AXT';
+    const bonus = info.level-1;
+    const maxHp = Math.floor(rng()*11)+15+bonus*3;
+    enemies.push({
+      id:'e'+i, name:(loc.kind==='castle'?'Belagerer':'Bandit')+' '+(i+1),
+      team:'enemy', isAlly:false, weapon:w, level:info.level, rank:'Gegner',
+      atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0,
+      maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
+    });
+  }
+
+  function findSpawnTiles(rows, count){
+    const cand=[];
+    for(const y of rows) for(let x=0;x<size;x++) if(TERRAIN[grid[y][x]].cost<=2) cand.push([x,y]);
+    for(let i=cand.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [cand[i],cand[j]]=[cand[j],cand[i]]; }
+    return cand;
+  }
+  const pSpawns = findSpawnTiles([size-1,size-2,size-3], roster.length);
+  roster.forEach((u,i)=>{ const s=pSpawns[i]||[i%size,size-1]; u.x=s[0]; u.y=s[1]; });
+  const eSpawns = findSpawnTiles([0,1,2], enemies.length);
+  enemies.forEach((e,i)=>{ const s=eSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
+
+  battle = {
+    loc, grid, size, units:[...roster,...enemies],
+    phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
+    turnNumber:1, enemyIdx:0, outcome:null
+  };
+}
+
+/* ===================== Kampf-Logik ===================== */
+function unitAt(x,y){ return battle.units.find(u=>u.alive && u.x===x && u.y===y); }
+function occupiedKeys(exclude){
+  const s=new Set();
+  battle.units.forEach(u=>{ if(u.alive && u!==exclude) s.add(u.x+','+u.y); });
+  return s;
+}
+function computeReachable(unit){
+  const bp = bpForSpeed(unit.spd);
+  const occ = occupiedKeys(unit);
+  const dist = {}; const startKey = unit.x+','+unit.y; dist[startKey]=0;
+  const queue = [{x:unit.x,y:unit.y,cost:0}];
+  while(queue.length){
+    queue.sort((a,b)=>a.cost-b.cost);
+    const cur = queue.shift();
+    const key = cur.x+','+cur.y;
+    if(cur.cost > (dist[key] ?? Infinity)) continue;
+    const dirs=[[0,1],[0,-1],[1,0],[-1,0]];
+    for(const [dx,dy] of dirs){
+      const nx=cur.x+dx, ny=cur.y+dy;
+      if(nx<0||ny<0||nx>=battle.size||ny>=battle.size) continue;
+      const nkey = nx+','+ny;
+      if(occ.has(nkey)) continue;
+      const terrain = TERRAIN[battle.grid[ny][nx]];
+      const ncost = cur.cost + terrain.cost;
+      if(ncost<=bp && ncost < (dist[nkey] ?? Infinity)){
+        dist[nkey]=ncost;
+        queue.push({x:nx,y:ny,cost:ncost});
+      }
+    }
+  }
+  return dist;
+}
+function triangleMod(atkW, defW){
+  if(WEAPON_TRIANGLE[atkW]===defW) return {hit:WEAPON_TRIANGLE_BONUS.hit, dmg:WEAPON_TRIANGLE_BONUS.dmg};
+  if(WEAPON_TRIANGLE[defW]===atkW) return {hit:-WEAPON_TRIANGLE_BONUS.hit, dmg:-WEAPON_TRIANGLE_BONUS.dmg};
+  return {hit:0, dmg:0};
+}
+function countFlankers(attacker, defender){
+  // Zählt zusätzliche angrenzende Einheiten desselben Teams wie der Angreifer,
+  // die ebenfalls an das Ziel angrenzen (Umzingelung). Maximal 3 (4 Seiten - Angreifer-Seite).
+  let n=0;
+  [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy])=>{
+    const u = unitAt(defender.x+dx, defender.y+dy);
+    if(u && u!==attacker && u.team===attacker.team) n++;
+  });
+  return n;
+}
+function attackOnce(attacker, defender, isCounter){
+  const terrainDef = TERRAIN[battle.grid[defender.y][defender.x]].def;
+  const tri = triangleMod(attacker.weapon, defender.weapon);
+  const flank = countFlankers(attacker, defender);
+  let hitChance = 70 + (attacker.spd - defender.spd) + tri.hit + flank*FLANK_BONUS.hit;
+  if(isCounter) hitChance -= 20;
+  hitChance = Math.max(5, Math.min(95, hitChance));
+  const hit = Math.random()*100 < hitChance;
+  applyXP(attacker, randInt(5,10));
+  if(hit){
+    let atkVal = attacker.atk;
+    if(isCounter) atkVal = atkVal*0.8;
+    let dmg = Math.round(atkVal) + tri.dmg + flank*FLANK_BONUS.dmg - defender.def - terrainDef;
+    dmg = Math.max(1, dmg);
+    defender.hp -= dmg;
+    const flankNote = flank>0 ? ` [Umzingelt von ${flank} weiteren ${attacker.team==='enemy'?'Gegnern':'Verbündeten'}: +Schaden/Trefferchance]` : '';
+    logMsg(`${attacker.name} trifft ${defender.name} (${dmg} Schaden).${flankNote}`);
+    if(defender.hp<=0){
+      defender.hp=0; defender.alive=false;
+      applyXP(attacker, randInt(20,40));
+      logMsg(`${defender.name} wurde besiegt.`);
+      return {died:true};
+    }
+  } else {
+    logMsg(`${attacker.name} verfehlt ${defender.name}.`);
+  }
+  return {died:false};
+}
+function resolveCombat(attacker, defender){
+  const r1 = attackOnce(attacker, defender, false);
+  if(!r1.died && defender.alive && attacker.alive && defender.spd >= attacker.spd){
+    attackOnce(defender, attacker, true);
+  }
+  if(attacker.alive && defender.alive && (attacker.spd - defender.spd) >= 10){
+    attackOnce(attacker, defender, false);
+  }
+  checkBattleEnd();
+}
+function checkBattleEnd(){
+  if(battle.outcome) return;
+  const enemiesAlive = battle.units.some(u=>u.team==='enemy' && u.alive);
+  const playersAlive = battle.units.some(u=>u.team==='player' && u.alive);
+  if(!enemiesAlive){ battle.outcome='victory'; logMsg('Sieg! Alle Gegner wurden besiegt.'); }
+  else if(!playersAlive){ battle.outcome='defeat'; logMsg('Niederlage! Die Truppe wurde überwältigt.'); }
+}
+
+/* Spieler-Interaktion */
+function adjacentEnemies(u){
+  const targets=[];
+  [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy])=>{
+    const t=unitAt(u.x+dx,u.y+dy);
+    if(t && t.team==='enemy') targets.push(t);
+  });
+  return targets;
+}
+function selectUnit(u){
+  battle.selected=u;
+  battle.moveRange=computeReachable(u);
+  const targets = adjacentEnemies(u);
+  battle.attackRange = targets.length ? new Set(targets.map(t=>t.x+','+t.y)) : null;
+  battle.mode='moving';
+  render();
+}
+function deselect(){
+  battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
+  render();
+}
+function moveSelectedTo(x,y){
+  const u = battle.selected;
+  u.x=x; u.y=y; u.hasMoved=true;
+  battle.moveRange=null;
+  const targets = adjacentEnemies(u);
+  if(targets.length){
+    battle.attackRange=new Set(targets.map(t=>t.x+','+t.y));
+    battle.mode='attacking';
+  } else {
+    u.hasActed=true;
+    battle.selected=null; battle.attackRange=null; battle.mode='idle';
+  }
+  render();
+}
+function attackFromCurrentPosition(target){
+  // Angriff ohne vorherige Bewegung, direkt aus der aktuellen Position heraus.
+  const u = battle.selected;
+  u.hasMoved=true;
+  battle.moveRange=null;
+  resolveCombat(u, target);
+  if(u.alive) u.hasActed=true;
+  if(!battle.outcome){ battle.selected=null; battle.attackRange=null; battle.mode='idle'; }
+  render();
+}
+function performPlayerAttack(target){
+  const u=battle.selected;
+  resolveCombat(u,target);
+  if(u.alive) u.hasActed=true;
+  if(!battle.outcome){ battle.selected=null; battle.attackRange=null; battle.mode='idle'; }
+  render();
+}
+function waitAction(){
+  if(battle.selected) battle.selected.hasActed=true;
+  battle.selected=null; battle.attackRange=null; battle.mode='idle';
+  render();
+}
+function onTileClick(x,y){
+  if(battle.phase!=='player' || battle.outcome) return;
+  if(battle.mode==='idle'){
+    const u=unitAt(x,y);
+    if(u && u.team==='player' && !u.hasActed) selectUnit(u);
+  } else if(battle.mode==='moving'){
+    const u = battle.selected;
+    const key = x+','+y;
+    const clicked = unitAt(x,y);
+    const isAdjacentToCurrent = Math.abs(u.x-x)+Math.abs(u.y-y)===1;
+    // Direkter Angriff auf einen angrenzenden Gegner, ohne sich zu bewegen.
+    if(clicked && clicked.team==='enemy' && isAdjacentToCurrent){
+      attackFromCurrentPosition(clicked);
+      return;
+    }
+    if(battle.moveRange && battle.moveRange[key]!==undefined){
+      moveSelectedTo(x,y);
+    } else {
+      if(clicked && clicked.team==='player' && !clicked.hasActed) selectUnit(clicked);
+      else deselect();
+    }
+  } else if(battle.mode==='attacking'){
+    const key=x+','+y;
+    const u=unitAt(x,y);
+    if(u && u.team==='enemy' && battle.attackRange && battle.attackRange.has(key)) performPlayerAttack(u);
+  }
+}
+
+/* Rückzug */
+function retreatBattle(){
+  if(!battle || battle.outcome) return;
+  battle.outcome='retreat';
+  logMsg('Die Truppe zieht sich vom Schlachtfeld zurück.');
+  render();
+}
+
+/* Gegnerphase */
+function endPlayerPhase(){
+  if(!battle || battle.phase!=='player' || battle.outcome) return;
+  battle.phase='enemy'; battle.mode='enemy'; battle.selected=null; battle.enemyIdx=0;
+  render();
+  setTimeout(runEnemyStep, 400);
+}
+function runEnemyStep(){
+  if(!battle || battle.outcome) return;
+  const enemies = battle.units.filter(u=>u.team==='enemy' && u.alive);
+  if(battle.enemyIdx>=enemies.length){ finishEnemyPhase(); return; }
+  const enemy = enemies[battle.enemyIdx];
+  battle.enemyIdx++;
+  performEnemyAction(enemy);
+  render();
+  if(battle.outcome) return;
+  setTimeout(runEnemyStep, 400);
+}
+function performEnemyAction(enemy){
+  const reachable = computeReachable(enemy);
+  const players = battle.units.filter(u=>u.team==='player' && u.alive);
+  let best=null; // {cost, tile:[x,y], target}
+  for(const p of players){
+    const neighbors=[[p.x,p.y-1],[p.x,p.y+1],[p.x-1,p.y],[p.x+1,p.y]];
+    for(const [nx,ny] of neighbors){
+      const key=nx+','+ny;
+      if(reachable[key]!==undefined){
+        if(!best || reachable[key]<best.cost) best={cost:reachable[key], tile:[nx,ny], target:p};
+      }
+    }
+  }
+  if(!best){ logMsg(`${enemy.name} verharrt auf Position.`); return; }
+  if(best.tile[0]!==enemy.x || best.tile[1]!==enemy.y){
+    enemy.x=best.tile[0]; enemy.y=best.tile[1];
+  }
+  resolveCombat(enemy, best.target);
+}
+function finishEnemyPhase(){
+  battle.units.forEach(u=>{ u.hasMoved=false; u.hasActed=false; });
+  battle.phase='player'; battle.mode='idle'; battle.turnNumber++; battle.enemyIdx=0;
+  render();
+}
+
+/* Kampf-Abschluss -> Weltkonsequenzen */
+function endBattle(outcome){
+  battle.units.filter(u=>u.team==='player').forEach(u=>{ u.hp=u.maxHp; u.alive=true; });
+  const loc = battle.loc;
+  const win = outcome==='victory';
+  if(loc.kind==='village'){
+    if(win){
+      loc.ref.liberated=true;
+      game.world.camps[loc.ref.idx].visible=true;
+      logMsg(`${loc.ref.name} wurde befreit. Ein verborgener Banditenstützpunkt wird sichtbar.`);
+      grantFirstAllyIfNeeded();
+      checkAllyPermanent();
+    } else {
+      logMsg(`Die Verteidigung von ${loc.ref.name} ist gescheitert.`);
+    }
+  } else if(loc.kind==='camp'){
+    if(win){
+      loc.ref.cleared=true;
+      logMsg(`${loc.ref.name} wurde ausgehoben.`);
+      if(loc.ref.idx===2) grantSecondAlly();
+      checkAllyPermanent();
+    } else {
+      logMsg(`Der Angriff auf ${loc.ref.name} ist gescheitert.`);
+    }
+  } else if(loc.kind==='castle'){
+    if(win){
+      loc.ref.siege=0;
+      logMsg(`${loc.ref.name} wurde erfolgreich verteidigt.`);
+      allyLeavesOnCastleDefense();
+    } else {
+      logMsg(`Die Verteidigung von ${loc.ref.name} ist gescheitert.`);
+      advanceCastleSiege(randInt(30,45));
+    }
+  }
+  if(loc.kind!=='castle'){
+    advanceCastleSiege(randInt(25,34));
+  }
+  game.day++;
+  battle=null; screen='world'; pendingLocation=null;
+  render();
+}
+
+/* ===================== Rendering ===================== */
+const appEl = document.getElementById('app');
+
+function render(){
+  let html = renderHeader();
+  html += '<div id="main">';
+  html += renderSidebar();
+  html += '<div id="content">';
+  if(screen==='world') html += renderWorldScreen();
+  if(screen==='battle') html += renderBattleScreen();
+  html += '</div></div>';
+  if(screen==='confirm') html += renderConfirmModal();
+  appEl.innerHTML = html;
+  attachHandlers();
+  if(screen==='battle') drawBattleCanvas();
+}
+
+function renderHeader(){
+  return `<div id="header">
+    <div>
+      <h1>Chronik der Grenzmark</h1>
+      <div class="sub">Taktischer Prototyp</div>
+    </div>
+    <div class="right">
+      <span class="day-badge">Tag ${game.day}</span>
+      <button data-action="newgame">Neues Spiel</button>
+    </div>
+  </div>`;
+}
+
+function unitCardHtml(u, opts){
+  opts = opts||{};
+  const hpPct = Math.max(0, Math.round((u.hp/u.maxHp)*100));
+  const xpPct = Math.min(100, u.xp);
+  const dead = u.alive===false;
+  return `<div class="roster-card ${dead?'dead':''}">
+    <div class="row1">
+      <span class="name">${u.name}</span>
+      <span class="badge weapon-${u.weapon}">${WEAPON_LETTER[u.weapon]}</span>
+    </div>
+    <div class="rank">${u.rank} · Lvl ${u.level}${dead?' · Kampfunfähig':''}</div>
+    <div class="statline">
+      <span>ANG ${u.atk}</span><span>VER ${u.def}</span><span>GES ${u.spd}</span><span>HP ${Math.max(0,u.hp)}/${u.maxHp}</span>
+    </div>
+    <div class="hpbar-outer"><div class="hpbar-inner" style="width:${hpPct}%"></div></div>
+    ${opts.showXp!==false ? `<div class="xpbar-outer"><div class="xpbar-inner" style="width:${xpPct}%"></div></div>` : ''}
+    <div class="portrait-note">🖼 Porträt: nicht verfügbar</div>
+  </div>`;
+}
+
+function renderSidebar(){
+  let html = '<div id="sidebar"><h3 style="margin:2px 0 10px;color:var(--gold);font-family:\'Cinzel\',serif;font-size:14px;">Truppe</h3>';
+  const roster = screen==='battle' ? battle.units.filter(u=>u.team==='player') : game.mercs;
+  roster.forEach(u=> html += unitCardHtml(u) );
+  if(screen!=='battle'){
+    if(game.firstAlly.joined){
+      const a = game.firstAlly.unit;
+      const status = game.firstAlly.permanent ? 'Dauerhaft' : (game.firstAlly.active ? 'Aktiv' : 'Abwesend');
+      html += unitCardHtml(a) ;
+      html += `<div class="small-note" style="margin-top:-6px;margin-bottom:8px;">Status: ${status}</div>`;
+    }
+    if(game.secondAlly.joined){
+      html += unitCardHtml(game.secondAlly.unit);
+    }
+  }
+  html += `<div id="logbox"><h3>Chronik</h3>`;
+  game.log.slice(0,6).forEach(l=> html += `<div class="entry">${l}</div>` );
+  html += `</div></div>`;
+  return html;
+}
+
+function renderWorldScreen(){
+  const w = game.world;
+  let html = '<div class="map-region"><div class="capital-node"><div class="n-name">Hauptstadt</div><div class="n-state">Sitz der Truppe · ' + getActivePlayerRoster().length + ' Kämpfer bereit</div></div></div>';
+
+  html += '<div class="map-region"><h2>Nordgrenze <span class="hint">Burgen werden nacheinander belagert</span></h2><div class="node-row">';
+  w.castles.forEach((c,i)=>{
+    if(c.fallen){
+      html += `<div class="node danger"><div class="n-name">${c.name}</div><div class="n-state">Gefallen</div></div>`;
+    } else if(i===w.activeCastle){
+      html += `<div class="node clickable" data-action="select-loc" data-kind="castle" data-idx="${i}">
+        <div class="n-name">${c.name}</div>
+        <div class="n-state">${siegeLabel(c.siege)}</div>
+        <div class="siegebar"><div class="siegebar-inner" style="width:${c.siege}%"></div></div>
+      </div>`;
+    } else {
+      html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht bedroht</div></div>`;
+    }
+  });
+  html += '</div></div>';
+
+  html += '<div class="map-region"><h2>Westliche Dörfer &amp; Banditenland</h2><div class="node-row">';
+  w.villages.forEach((v,i)=>{
+    if(v.liberated){
+      html += `<div class="node success"><div class="n-name">${v.name}</div><div class="n-state">Befreit</div></div>`;
+    } else {
+      html += `<div class="node clickable" data-action="select-loc" data-kind="village" data-idx="${i}">
+        <div class="n-name">${v.name}</div><div class="n-state">Von Banditen bedroht</div></div>`;
+    }
+  });
+  w.camps.forEach((c,i)=>{
+    if(!c.visible){
+      html += `<div class="node locked"><div class="n-name">???</div><div class="n-state">Unentdeckt</div></div>`;
+    } else if(c.cleared){
+      html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Ausgehoben</div></div>`;
+    } else {
+      html += `<div class="node clickable" data-action="select-loc" data-kind="camp" data-idx="${i}">
+        <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+    }
+  });
+  html += '</div></div>';
+  return html;
+}
+
+function renderConfirmModal(){
+  const loc = pendingLocation;
+  const info = getEncounterInfo(loc);
+  return `<div class="overlay"><div class="modal">
+    <h2>${loc.ref.name}</h2>
+    <div class="info-line"><span>Gegner</span><span>${info.count} × ${info.label}</span></div>
+    <div class="info-line"><span>Stufe</span><span>${info.level}</span></div>
+    <div class="info-line"><span>Eigene Kämpfer</span><span>${getActivePlayerRoster().length}</span></div>
+    <div class="buttons">
+      <button data-action="cancel-loc">Abbrechen</button>
+      <button class="primary" data-action="confirm-loc">Einsatz beginnen</button>
+    </div>
+  </div></div>`;
+}
+
+function renderBattleScreen(){
+  const canvasPx = GRID_SIZE*TILE;
+  let html = `<div class="phase-banner">${battle.phase==='player' ? 'Spielerphase — Runde '+battle.turnNumber : 'Gegnerphase'}</div>`;
+  html += '<div id="battle-wrap">';
+  html += `<div id="battle-canvas-holder" style="width:${canvasPx+16}px;height:${canvasPx+16}px;">
+    <canvas id="battleCanvas" width="${canvasPx}" height="${canvasPx}"></canvas>
+  </div>`;
+  html += '<div id="battle-side">';
+
+  html += `<div class="panel-box"><h3>Gelände</h3><div class="legend">`;
+  Object.entries(TERRAIN).forEach(([k,t])=>{
+    html += `<span><i style="background:${t.color}"></i>${t.name} (${t.cost} BP, +${t.def} Vert.)</span>`;
+  });
+  html += `</div></div>`;
+
+  html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen.</div></div>`;
+  html += `<div class="panel-box"><h3>Umzingelung</h3><div class="help-text" style="margin-bottom:0;">Steht neben dem Angreifer noch mind. ein weiterer Verbündeter direkt am Ziel an, steigen Trefferchance (+${FLANK_BONUS.hit} pro zusätzlichem Angreifer) und Schaden (+${FLANK_BONUS.dmg}). Gilt für beide Seiten.</div></div>`;
+
+  if(battle.selected){
+    html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.selected)}</div>`;
+  }
+
+  html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
+    <button data-action="wait" ${battle.mode==='attacking'?'':'disabled'}>Warten</button>
+    <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
+    <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>
+  </div></div>`;
+
+  html += `<div class="panel-box"><h3>Kampf-Chronik</h3><div class="battle-log">`;
+  game.log.slice(0,10).forEach(l=> html += `<div class="entry">${l}</div>`);
+  html += `</div></div>`;
+
+  html += '</div></div>'; // battle-side, battle-wrap
+
+  if(battle.outcome){
+    const won = battle.outcome==='victory';
+    const label = won ? 'Sieg' : (battle.outcome==='retreat' ? 'Rückzug' : 'Niederlage');
+    html += `<div class="result-overlay"><div class="result-box ${won?'victory':'defeat'}">
+      <h2>${label}</h2>
+      <p style="color:var(--text-dim);max-width:280px;">${won ? 'Die Truppe hat das Schlachtfeld unter Kontrolle. Alle Einheiten werden vollständig geheilt.' : 'Die Truppe zieht sich zurück in die Hauptstadt und wird dort geheilt. Erfahrung bleibt erhalten.'}</p>
+      <button class="primary" data-action="end-battle">Weiter</button>
+    </div></div>`;
+  }
+
+  return html;
+}
+
+function drawBattleCanvas(){
+  const canvas = document.getElementById('battleCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const size = battle.size;
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      const t = TERRAIN[battle.grid[y][x]];
+      ctx.fillStyle = t.color;
+      ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+      ctx.strokeRect(x*TILE,y*TILE,TILE,TILE);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = '13px sans-serif';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(t.icon, x*TILE+TILE/2, y*TILE+TILE/2);
+    }
+  }
+  // move range
+  if(battle.moveRange){
+    ctx.fillStyle = 'rgba(91,122,166,0.45)';
+    Object.keys(battle.moveRange).forEach(k=>{
+      const [x,y]=k.split(',').map(Number);
+      ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+    });
+  }
+  // attack range
+  if(battle.attackRange){
+    ctx.fillStyle = 'rgba(163,69,59,0.55)';
+    battle.attackRange.forEach(k=>{
+      const [x,y]=k.split(',').map(Number);
+      ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+    });
+  }
+  // units
+  battle.units.filter(u=>u.alive).forEach(u=>{
+    const cx = u.x*TILE+TILE/2, cy=u.y*TILE+TILE/2;
+    let fill = u.team==='enemy' ? '#a3453b' : (u.isAlly ? '#5f8f61' : '#c6a153');
+    if(battle.selected===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,13,0,Math.PI*2); ctx.stroke(); }
+    ctx.fillStyle=fill;
+    ctx.beginPath(); ctx.arc(cx,cy,11,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.fillStyle= u.team==='enemy' ? '#fff' : '#1a1408';
+    ctx.font='bold 11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(WEAPON_LETTER[u.weapon], cx, cy+1);
+    // hp bar
+    const pct = Math.max(0,u.hp/u.maxHp);
+    ctx.fillStyle='#111528'; ctx.fillRect(u.x*TILE+4,u.y*TILE+2,TILE-8,3);
+    ctx.fillStyle= pct>0.5?'#5f8f61':(pct>0.25?'#c6a153':'#a3453b');
+    ctx.fillRect(u.x*TILE+4,u.y*TILE+2,(TILE-8)*pct,3);
+    if(u.hasActed){
+      ctx.fillStyle='rgba(0,0,0,0.35)';
+      ctx.fillRect(u.x*TILE,u.y*TILE,TILE,TILE);
+    }
+  });
+  canvas.onclick = (evt)=>{
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+    const x = Math.floor(((evt.clientX-rect.left)*scaleX)/TILE);
+    const y = Math.floor(((evt.clientY-rect.top)*scaleY)/TILE);
+    if(x<0||y<0||x>=size||y>=size) return;
+    onTileClick(x,y);
+  };
+}
+
+/* ===================== Event-Delegation ===================== */
+function attachHandlers(){
+  appEl.querySelectorAll('[data-action]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      const action = el.getAttribute('data-action');
+      if(action==='newgame'){ if(confirm('Neues Spiel starten? Der aktuelle Fortschritt geht verloren.')) { initGame(); render(); } }
+      else if(action==='select-loc'){
+        const kind = el.getAttribute('data-kind');
+        const idx = Number(el.getAttribute('data-idx'));
+        const ref = kind==='village' ? game.world.villages[idx] : kind==='camp' ? game.world.camps[idx] : game.world.castles[idx];
+        pendingLocation = {kind, ref};
+        screen='confirm';
+        render();
+      }
+      else if(action==='cancel-loc'){ pendingLocation=null; screen='world'; render(); }
+      else if(action==='confirm-loc'){ generateBattle(pendingLocation); screen='battle'; render(); }
+      else if(action==='wait'){ waitAction(); }
+      else if(action==='end-phase'){ endPlayerPhase(); }
+      else if(action==='retreat'){ if(confirm('Wirklich zurückziehen? Dies zählt als Niederlage für die Weltkonsequenzen.')) retreatBattle(); }
+      else if(action==='end-battle'){ endBattle(battle.outcome); }
+    });
+  });
+}
+
+/* ===================== Start ===================== */
+initGame();
+render();
+</script>
+</body>
+</html>
