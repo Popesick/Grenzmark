@@ -651,7 +651,7 @@ function generateBattle(loc){
   battle = {
     loc, grid, size, units:[...roster,...enemies], specialTiles,
     phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
-    turnNumber:1, enemyIdx:0, outcome:null
+    turnNumber:1, enemyIdx:0, outcome:null, lastAttackerId:null
   };
 }
 
@@ -704,6 +704,7 @@ function countFlankers(attacker, defender){
   return n;
 }
 function attackOnce(attacker, defender, isCounter){
+  if(battle) battle.lastAttackerId = attacker.id;
   const terrainDef = TERRAIN[battle.grid[defender.y][defender.x]].def;
   const tri = triangleMod(attacker.weapon, defender.weapon);
   const flank = countFlankers(attacker, defender);
@@ -1039,8 +1040,32 @@ function slugify(s){
     .replace(/[^a-z0-9]+/g,'-')
     .replace(/(^-+|-+$)/g,'');
 }
-function portraitPath(u){ return `graphics/portraits/${slugify(u.name)}.png`; }
+function portraitState(u){
+  // Bestimmt, welche Bildvariante gerade passend ist:
+  // 'agg' beim Angreifen, 'fear' bei kritischem HP-Stand, 'ver' generell im Kampf, sonst neutral.
+  if(screen==='battle' && battle){
+    if(battle.lastAttackerId === u.id) return 'agg';
+    if(u.maxHp>0 && (u.hp/u.maxHp) < 0.25) return 'fear';
+    return 'ver';
+  }
+  return null; // neutral
+}
+function portraitPath(u){
+  const state = portraitState(u);
+  return `graphics/portraits/${slugify(u.name)}${state?('_'+state):''}.png`;
+}
+function neutralPortraitPath(u){ return `graphics/portraits/${slugify(u.name)}.png`; }
 function initials(name){ return String(name).trim().split(/\s+/).map(p=>p[0]).join('').slice(0,2).toUpperCase(); }
+function portraitImgHtml(u, imgClass, fallbackClass){
+  imgClass = imgClass || 'portrait-img';
+  fallbackClass = fallbackClass || 'portrait-fallback';
+  const statePath = portraitPath(u);
+  const neutralPath = neutralPortraitPath(u);
+  const fb = (statePath!==neutralPath) ? neutralPath : '';
+  return `<img class="${imgClass}" src="${statePath}" data-fallback="${fb}" alt=""
+      onerror="var f=this.dataset.fallback; if(f){ this.dataset.fallback=''; this.src=f; } else { this.style.display='none'; this.nextElementSibling.style.display='flex'; }">
+    <div class="${fallbackClass}">${initials(u.name)}</div>`;
+}
 
 function unitCardHtml(u, opts){
   opts = opts||{};
@@ -1049,8 +1074,7 @@ function unitCardHtml(u, opts){
   const dead = u.alive===false;
   return `<div class="roster-card ${dead?'dead':''}">
     <div class="portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">
-      <img class="portrait-img" src="${portraitPath(u)}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-      <div class="portrait-fallback">${initials(u.name)}</div>
+      ${portraitImgHtml(u)}
     </div>
     <div class="card-body">
       <div class="row1">
@@ -1170,8 +1194,7 @@ function renderAnnouncementModal(){
   const label = m.action==='restart' ? 'Neu beginnen' : 'Weiter';
   const title = m.action==='restart' ? 'Erfolg!' : 'Neuigkeiten';
   const portraitHtml = m.unit ? `<div class="modal-portrait" title="Porträt-Pfad: ${portraitPath(m.unit)}">
-      <img class="modal-portrait-img" src="${portraitPath(m.unit)}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-      <div class="modal-portrait-fallback">${initials(m.unit.name)}</div>
+      ${portraitImgHtml(m.unit, 'modal-portrait-img', 'modal-portrait-fallback')}
     </div>` : '';
   return `<div class="overlay"><div class="modal" style="text-align:center;">
     ${portraitHtml}
