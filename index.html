@@ -50,18 +50,21 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 
 .roster-card{background:var(--panel-alt);border:1px solid var(--line-soft);border-radius:4px;padding:9px 10px;margin-bottom:8px;}
 .roster-card.dead{opacity:.4;}
-.roster-card .row1{display:flex;justify-content:space-between;align-items:baseline;}
+.roster-card .row1{display:flex;align-items:center;gap:8px;}
+.roster-card .name-block{flex:1;min-width:0;}
 .roster-card .name{font-weight:600;font-size:14px;}
 .roster-card .rank{font-size:11px;color:var(--text-dim);}
-.roster-card .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid var(--line);color:var(--text-dim);margin-left:5px;}
+.roster-card .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid var(--line);color:var(--text-dim);margin-left:5px;flex:0 0 auto;}
 .roster-card .badge.weapon-SCHWERT{border-color:#8fa8c9;color:#8fa8c9;}
 .roster-card .badge.weapon-AXT{border-color:#c98f6b;color:#c98f6b;}
 .roster-card .badge.weapon-SPEER{border-color:#a7c98f;color:#a7c98f;}
+.portrait-wrap{width:32px;height:32px;border-radius:50%;overflow:hidden;flex:0 0 32px;position:relative;border:1px solid var(--line-soft);background:#111528;}
+.portrait-img{width:100%;height:100%;object-fit:cover;display:block;}
+.portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:11px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);}
 .statline{display:flex;gap:8px;font-size:11px;color:var(--text-dim);margin-top:4px;flex-wrap:wrap;}
 .hpbar-outer,.xpbar-outer{height:6px;border-radius:3px;background:#111528;overflow:hidden;margin-top:5px;border:1px solid var(--line-soft);}
 .hpbar-inner{height:100%;background:linear-gradient(90deg,var(--success),#7fb37f);}
 .xpbar-inner{height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));}
-.portrait-note{font-size:9px;color:var(--text-dim);opacity:.6;font-style:italic;}
 
 #logbox{margin-top:14px;border-top:1px solid var(--line-soft);padding-top:10px;}
 #logbox h3{font-size:12px;margin:0 0 6px;color:var(--text-dim);text-transform:none;}
@@ -178,8 +181,27 @@ Object.entries(SFX_FILES).forEach(([key, path])=>{
   SFX[key] = a;
 });
 
-let soundEnabled = true;
+let musicEnabled = true;
+let sfxEnabled = true;
 let musicKind = null; // aktuell aktiver Musiktrack: 'overworld' | 'battle' | null
+let audioUnlocked = false;
+
+// Einmaliges "Entsperren" der Audiowiedergabe beim allerersten Klick/Tastendruck.
+// Browser blockieren Audio-Autoplay, bis eine echte Nutzerinteraktion stattgefunden hat;
+// ohne diesen Trick bleibt die Musik stumm, bis man zufällig einen Button erwischt,
+// der die Wiedergabe erneut anstößt (z.B. durch Aus-/wieder Einschalten).
+function unlockAudioOnce(){
+  if(audioUnlocked) return;
+  audioUnlocked = true;
+  [...Object.values(AUDIO), ...Object.values(SFX)].forEach(a=>{
+    const p = a.play();
+    if(p && p.then){ p.then(()=>{ a.pause(); try{ a.currentTime=0; }catch(e){} }).catch(()=>{ audioUnlocked=false; }); }
+    else { a.pause(); }
+  });
+  applyMusic();
+}
+document.addEventListener('pointerdown', unlockAudioOnce, {once:true});
+document.addEventListener('keydown', unlockAudioOnce, {once:true});
 
 function desiredMusicKind(){ return screen==='battle' ? 'battle' : 'overworld'; }
 
@@ -191,7 +213,7 @@ function applyMusic(){
     const a = AUDIO[desired];
     if(a && !a.__unavailable) { try{ a.currentTime = 0; }catch(e){} }
   }
-  if(!soundEnabled){
+  if(!musicEnabled){
     Object.values(AUDIO).forEach(a=>a.pause());
     return;
   }
@@ -202,12 +224,15 @@ function applyMusic(){
     if(p && p.catch) p.catch(()=>{ /* Autoplay evtl. noch durch Browser blockiert, bis zur nächsten Nutzerinteraktion */ });
   }
 }
-function toggleSound(){
-  soundEnabled = !soundEnabled;
+function toggleMusic(){
+  musicEnabled = !musicEnabled;
   applyMusic();
 }
+function toggleSfx(){
+  sfxEnabled = !sfxEnabled;
+}
 function playSfx(key){
-  if(!soundEnabled) return;
+  if(!sfxEnabled) return;
   const src = SFX[key];
   if(!src || src.__unavailable) return;
   // cloneNode erlaubt überlappende Wiedergabe (z.B. mehrere Treffer kurz hintereinander)
@@ -340,18 +365,30 @@ function grantFirstAllyIfNeeded(){
     logMsg(`${a.unit.name} schließt sich als Verbündeter der Truppe an.`);
     queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`);
   }
-  else if(!a.active && !a.permanent){ a.active=true; logMsg(`${a.unit.name} kehrt zur Truppe zurück.`); }
+  else if(!a.active && !a.permanent){
+    a.active=true;
+    logMsg(`${a.unit.name} schließt sich wieder deiner Party an.`);
+    queueModal(`${a.unit.name} schließt sich wieder deiner Party an.`);
+  }
 }
 function allyLeavesOnCastleDefense(){
   const a = game.firstAlly;
-  if(a.joined && a.active && !a.permanent){ a.active=false; logMsg(`${a.unit.name} verlässt die Truppe, um die Verteidigung der Burg zu unterstützen.`); }
+  if(a.joined && a.active && !a.permanent){
+    a.active=false;
+    logMsg(`${a.unit.name} verteidigt weiter sein Dorf und hat die Party verlassen. Er wird sich dir wieder anschließen, wenn du die Banditen angreifst.`);
+    queueModal(`${a.unit.name} verteidigt weiter sein Dorf und hat die Party verlassen. Er wird sich dir wieder anschließen, wenn du die Banditen angreifst.`);
+  }
 }
 function checkAllyPermanent(){
   const a = game.firstAlly;
   if(!a.joined || a.permanent) return;
   const v = game.world.villages.every(x=>x.liberated);
   const c = game.world.camps.every(x=>x.cleared);
-  if(v && c){ a.permanent=true; a.active=true; logMsg(`${a.unit.name} wird dauerhaftes Mitglied der Truppe.`); }
+  if(v && c){
+    a.permanent=true; a.active=true;
+    logMsg(`${a.unit.name} wird dauerhaftes Mitglied der Truppe.`);
+    queueModal(`Alle Banditen wurden besiegt. ${a.unit.name} wird dauerhaftes Mitglied der Truppe.`);
+  }
 }
 function grantSecondAlly(){
   const a = game.secondAlly;
@@ -911,6 +948,7 @@ function endBattle(outcome){
     if(win){
       loc.ref.cleared=true;
       logMsg(`${loc.ref.name} wurde ausgehoben.`);
+      grantFirstAllyIfNeeded();
       if(loc.ref.idx===2) grantSecondAlly();
       checkAllyPermanent();
     } else {
@@ -981,11 +1019,21 @@ function renderHeader(){
     </div>
     <div class="right">
       <span class="day-badge">Tag ${game.day}</span>
-      <button data-action="toggle-sound">${soundEnabled ? '🔊 Sound an' : '🔇 Sound aus'}</button>
+      <button data-action="toggle-music">${musicEnabled ? '🎵 Musik an' : '🎵 Musik aus'}</button>
+      <button data-action="toggle-sfx">${sfxEnabled ? '🔊 Sound an' : '🔇 Sound aus'}</button>
       <button data-action="newgame">Neues Spiel</button>
     </div>
   </div>`;
 }
+
+function slugify(s){
+  return String(s).toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/g,'-')
+    .replace(/(^-+|-+$)/g,'');
+}
+function portraitPath(u){ return `graphics/portraits/${slugify(u.name)}.png`; }
+function initials(name){ return String(name).trim().split(/\s+/).map(p=>p[0]).join('').slice(0,2).toUpperCase(); }
 
 function unitCardHtml(u, opts){
   opts = opts||{};
@@ -994,7 +1042,13 @@ function unitCardHtml(u, opts){
   const dead = u.alive===false;
   return `<div class="roster-card ${dead?'dead':''}">
     <div class="row1">
-      <span class="name">${u.name}</span>
+      <div class="portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">
+        <img class="portrait-img" src="${portraitPath(u)}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+        <div class="portrait-fallback">${initials(u.name)}</div>
+      </div>
+      <div class="name-block">
+        <span class="name">${u.name}</span>
+      </div>
       <span class="badge weapon-${u.weapon}">${WEAPON_LETTER[u.weapon]}</span>
     </div>
     <div class="rank">${u.rank} · Lvl ${u.level} · ${WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
@@ -1003,7 +1057,6 @@ function unitCardHtml(u, opts){
     </div>
     <div class="hpbar-outer"><div class="hpbar-inner" style="width:${hpPct}%"></div></div>
     ${opts.showXp!==false ? `<div class="xpbar-outer"><div class="xpbar-inner" style="width:${xpPct}%"></div></div>` : ''}
-    <div class="portrait-note">🖼 Porträt: nicht verfügbar</div>
   </div>`;
 }
 
@@ -1237,7 +1290,8 @@ function attachHandlers(){
     el.addEventListener('click', (e)=>{
       const action = el.getAttribute('data-action');
       if(action==='newgame'){ if(confirm('Neues Spiel starten? Der aktuelle Fortschritt geht verloren.')) { initGame(); render(); } }
-      else if(action==='toggle-sound'){ toggleSound(); render(); }
+      else if(action==='toggle-music'){ toggleMusic(); render(); }
+      else if(action==='toggle-sfx'){ toggleSfx(); render(); }
       else if(action==='select-loc'){
         const kind = el.getAttribute('data-kind');
         const idx = Number(el.getAttribute('data-idx'));
