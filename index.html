@@ -37,6 +37,13 @@ button.danger{border-color:var(--danger);}
 button.danger:hover:not(:disabled){background:var(--danger-dim);}
 
 /* header */
+#intro-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,#1c2440,#0a0d18);padding:20px;}
+.intro-inner{text-align:center;max-width:720px;}
+.intro-title{font-size:34px;margin:0 0 20px;}
+.intro-sub{color:var(--text-dim);font-size:15px;line-height:1.7;margin-bottom:30px;}
+.intro-video-wrap{margin-bottom:26px;}
+.intro-video-wrap video{width:100%;max-width:680px;border-radius:6px;border:1px solid var(--line);background:#000;display:block;margin:0 auto;}
+.intro-video-fallback{color:var(--text-dim);font-size:14px;font-style:italic;margin-bottom:0;}
 #header{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;background:var(--bg-alt);border-bottom:1px solid var(--line);}
 #header h1{margin:0;font-size:21px;}
 #header .sub{color:var(--text-dim);font-size:13px;margin-top:2px;}
@@ -66,6 +73,15 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 .modal-portrait-img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;}
 .modal-portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:26px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
 .statline{display:flex;gap:8px;font-size:11px;color:var(--text-dim);margin-top:4px;flex-wrap:wrap;}
+.statline-compact{display:flex;gap:8px;font-size:11px;color:var(--text-dim);margin-top:4px;flex-wrap:wrap;}
+.stat-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);margin-top:4px;}
+.stat-row .stat-label{flex:0 0 20px;}
+.stat-row .stat-num{flex:0 0 auto;min-width:40px;color:var(--text);}
+.mini-bar{flex:1;height:6px;border-radius:3px;background:#111528;overflow:hidden;border:1px solid var(--line-soft);}
+.mini-bar-fill{height:100%;}
+.mini-bar-fill.hp{background:linear-gradient(90deg,var(--success),#7fb37f);}
+.mini-bar-fill.mp{background:linear-gradient(90deg,#5a4a8f,#a78bc9);}
+.mini-bar-fill.xp{background:linear-gradient(90deg,var(--gold-dim),var(--gold));}
 .hpbar-outer,.xpbar-outer{height:6px;border-radius:3px;background:#111528;overflow:hidden;margin-top:5px;border:1px solid var(--line-soft);}
 .hpbar-inner{height:100%;background:linear-gradient(90deg,var(--success),#7fb37f);}
 .xpbar-inner{height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));}
@@ -208,9 +224,17 @@ function unlockAudioOnce(){
 document.addEventListener('pointerdown', unlockAudioOnce, {once:true});
 document.addEventListener('keydown', unlockAudioOnce, {once:true});
 
-function desiredMusicKind(){ return screen==='battle' ? 'battle' : 'overworld'; }
+function desiredMusicKind(){
+  return screen==='battle' ? 'battle' : 'overworld';
+}
 
 function applyMusic(){
+  if(screen==='intro'){
+    // Während des Intro-Videos läuft keine separate Hintergrundmusik (Video bringt eigenen Ton mit).
+    Object.values(AUDIO).forEach(a=>a.pause());
+    musicKind = null;
+    return;
+  }
   const desired = desiredMusicKind();
   if(desired !== musicKind){
     Object.values(AUDIO).forEach(a=>{ a.pause(); });
@@ -224,7 +248,7 @@ function applyMusic(){
   }
   const a = AUDIO[desired];
   if(!a || a.__unavailable) return;
-  if(a.paused){
+  if(a.paused && !a.ended){
     const p = a.play();
     if(p && p.catch) p.catch(()=>{ /* Autoplay evtl. noch durch Browser blockiert, bis zur nächsten Nutzerinteraktion */ });
   }
@@ -335,7 +359,7 @@ function makeSecondAllyUnit(){
 
 /* ===================== Weltinitialisierung ===================== */
 let game = null;
-let screen = 'world'; // 'world' | 'confirm' | 'battle'
+let screen = 'intro'; // 'intro' | 'world' | 'confirm' | 'battle'
 let pendingLocation = null;
 let battle = null;
 let modalQueue = []; // Warteschlange für Dialogboxen (neue Kämpfer, Aufträge, Erfolg)
@@ -603,8 +627,26 @@ function placeSpecialCluster(grid, size, rng, rows, burgCount, towerCount){
     const type = idx<burgCount ? 'BURG' : 'WACHTURM';
     grid[y][x]=type;
     tiles.push({x,y,type});
+    if(type==='BURG') ensureRoadAdjacent(grid,size,x,y);
   });
   return tiles;
+}
+function ensureRoadAdjacent(grid, size, x, y){
+  // Dörfer und Burgen sollen immer an ein Straßenfeld grenzen.
+  const dirs=[[0,1],[0,-1],[1,0],[-1,0]];
+  const hasRoad = dirs.some(([dx,dy])=>{
+    const nx=x+dx, ny=y+dy;
+    return nx>=0 && ny>=0 && nx<size && ny<size && grid[ny][nx]==='STRASSE';
+  });
+  if(hasRoad) return;
+  for(const [dx,dy] of dirs){
+    const nx=x+dx, ny=y+dy;
+    if(nx<0||ny<0||nx>=size||ny>=size) continue;
+    const t = grid[ny][nx];
+    if(t==='DORF'||t==='BURG'||t==='WACHTURM') continue;
+    grid[ny][nx]='STRASSE';
+    return;
+  }
 }
 
 function generateBattle(loc){
@@ -639,6 +681,7 @@ function generateBattle(loc){
     const midRow = Math.floor(size/2);
     const dx = Math.floor(rng()*size);
     grid[midRow][dx] = 'DORF';
+    ensureRoadAdjacent(grid,size,dx,midRow);
   } else if(loc.kind==='camp'){
     specialTiles = placeSpecialCluster(grid,size,rng,[0,1,2],0,3);
   } else if(loc.kind==='castle'){
@@ -687,7 +730,8 @@ function generateBattle(loc){
     loc, grid, size, units:[...roster,...enemies], specialTiles,
     phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
     turnNumber:1, enemyIdx:0, outcome:null, lastAttackerId:null,
-    deploying:true, deploySelected:null, castingSpell:null
+    deploying:true, deploySelected:null, castingSpell:null,
+    damagePopups:[], inspecting:null, inspectRange:null
   };
 }
 
@@ -739,6 +783,10 @@ function countFlankers(attacker, defender){
   });
   return n;
 }
+function pushDamagePopup(x,y,text,color){
+  if(!battle) return;
+  battle.damagePopups.push({x,y,text,color});
+}
 function attackOnce(attacker, defender, isCounter){
   if(battle) battle.lastAttackerId = attacker.id;
   const terrainDef = TERRAIN[battle.grid[defender.y][defender.x]].def;
@@ -757,6 +805,7 @@ function attackOnce(attacker, defender, isCounter){
     if(attacker.isMage) dmg = Math.round(dmg*0.25); // Nahkampfangriffe von Magiern sind stark abgeschwächt
     dmg = Math.max(1, dmg);
     defender.hp -= dmg;
+    pushDamagePopup(defender.x, defender.y, '-'+dmg, '#ff6b5e');
     const flankNote = flank>0 ? ` [Umzingelt von ${flank} weiteren ${attacker.team==='enemy'?'Gegnern':'Verbündeten'}: +Schaden/Trefferchance]` : '';
     logMsg(`${attacker.name} trifft ${defender.name} (${dmg} Schaden).${flankNote}`);
     if(defender.hp<=0){
@@ -767,11 +816,13 @@ function attackOnce(attacker, defender, isCounter){
       return {died:true};
     }
   } else {
+    pushDamagePopup(defender.x, defender.y, 'Verfehlt', '#9aa3c4');
     logMsg(`${attacker.name} verfehlt ${defender.name}.`);
   }
   return {died:false};
 }
 function resolveCombat(attacker, defender){
+  if(battle) battle.damagePopups = [];
   const r1 = attackOnce(attacker, defender, false);
   if(!r1.died && defender.alive && attacker.alive && defender.spd >= attacker.spd){
     attackOnce(defender, attacker, true);
@@ -812,6 +863,7 @@ function castSpell(mage, target, spellKey){
   const spell = SPELLS[spellKey];
   if(mage.mag < spell.cost) return;
   mage.mag -= spell.cost;
+  battle.damagePopups = [];
   if(spellKey==='feuerball'){
     const terrainDef = TERRAIN[battle.grid[target.y][target.x]].def;
     let hitChance = 70 + (mage.spd - target.spd);
@@ -822,6 +874,7 @@ function castSpell(mage, target, spellKey){
       let dmg = Math.round(mage.atk) - target.def - (target.defBuff||0) - terrainDef;
       dmg = Math.max(1, dmg);
       target.hp -= dmg;
+      pushDamagePopup(target.x, target.y, '-'+dmg, '#ff6b5e');
       logMsg(`${mage.name} trifft ${target.name} mit einem Feuerball (${dmg} Schaden).`);
       if(target.hp<=0){
         target.hp=0; target.alive=false;
@@ -830,6 +883,7 @@ function castSpell(mage, target, spellKey){
         playDeathSfx(target);
       }
     } else {
+      pushDamagePopup(target.x, target.y, 'Verfehlt', '#9aa3c4');
       logMsg(`${mage.name}s Feuerball verfehlt ${target.name}.`);
     }
     checkBattleEnd();
@@ -861,6 +915,7 @@ function adjacentOpponents(u){
 }
 function adjacentEnemies(u){ return adjacentOpponents(u); }
 function selectUnit(u){
+  battle.inspecting=null; battle.inspectRange=null;
   battle.selected=u;
   battle.moveRange=computeReachable(u);
   const targets = adjacentEnemies(u);
@@ -870,6 +925,16 @@ function selectUnit(u){
 }
 function deselect(){
   battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
+  render();
+}
+function inspectUnit(u){
+  battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
+  battle.inspecting=u;
+  battle.inspectRange=computeReachable(u);
+  render();
+}
+function clearInspect(){
+  battle.inspecting=null; battle.inspectRange=null;
   render();
 }
 function moveSelectedTo(x,y){
@@ -975,7 +1040,10 @@ function onTileClick(x,y){
   if(battle.phase!=='player' || battle.outcome) return;
   if(battle.mode==='idle'){
     const u=unitAt(x,y);
-    if(u && u.team==='player' && !u.hasActed) selectUnit(u);
+    if(u && u.team==='player' && !u.hasActed){ selectUnit(u); }
+    else if(u && u.team==='enemy'){
+      if(battle.inspecting===u){ clearInspect(); } else { inspectUnit(u); }
+    } else if(battle.inspecting){ clearInspect(); }
   } else if(battle.mode==='moving'){
     const u = battle.selected;
     const key = x+','+y;
@@ -1019,6 +1087,7 @@ function retreatBattle(){
 function endPlayerPhase(){
   if(!battle || battle.phase!=='player' || battle.outcome) return;
   battle.phase='enemy'; battle.mode='enemy'; battle.selected=null; battle.enemyIdx=0;
+  battle.inspecting=null; battle.inspectRange=null; battle.damagePopups=[];
   render();
   setTimeout(runEnemyStep, 400);
 }
@@ -1187,6 +1256,12 @@ function endBattle(outcome){
 const appEl = document.getElementById('app');
 
 function render(){
+  if(screen==='intro'){
+    appEl.innerHTML = renderIntroScreen();
+    attachHandlers();
+    applyMusic();
+    return;
+  }
   let html = renderHeader();
   html += '<div id="main">';
   html += renderSidebar();
@@ -1200,6 +1275,24 @@ function render(){
   attachHandlers();
   if(screen==='battle') drawBattleCanvas();
   applyMusic();
+}
+
+function renderIntroScreen(){
+  return `<div id="intro-screen">
+    <div class="intro-inner">
+      <h1 class="intro-title">Chronik der Grenzmark</h1>
+      <div class="intro-video-wrap">
+        <video id="introVideo" src="video/Intro.mp4" autoplay playsinline controls
+          onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
+          onended="onIntroVideoEnded();"></video>
+        <p class="intro-video-fallback" style="display:none;">Kein Intro-Video gefunden (video/Intro.mp4).</p>
+      </div>
+      <button class="primary" data-action="start-game">Spiel beginnen</button>
+    </div>
+  </div>`;
+}
+function onIntroVideoEnded(){
+  if(screen==='intro'){ screen='world'; render(); }
 }
 
 function renderHeader(){
@@ -1254,9 +1347,9 @@ function unitCardHtml(u, opts){
   opts = opts||{};
   const hpPct = Math.max(0, Math.round((u.hp/u.maxHp)*100));
   const xpPct = Math.min(100, u.xp);
-  const magPct = u.isMage ? Math.max(0, Math.round((u.mag/u.maxMag)*100)) : 0;
+  const magPct = (u.isMage && u.maxMag>0) ? Math.max(0, Math.round((u.mag/u.maxMag)*100)) : 0;
   const dead = u.alive===false;
-  const buffNote = u.defBuffRounds>0 ? ` · +${u.defBuff} VER (${u.defBuffRounds} Runde${u.defBuffRounds>1?'n':''})` : '';
+  const buffNote = u.defBuffRounds>0 ? ` (+${u.defBuff}, ${u.defBuffRounds}R)` : '';
   return `<div class="roster-card ${dead?'dead':''}">
     <div class="portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">
       ${portraitImgHtml(u)}
@@ -1267,12 +1360,12 @@ function unitCardHtml(u, opts){
         <span class="badge weapon-${u.isMage?'MAGIE':u.weapon}">${u.isMage?'M':WEAPON_LETTER[u.weapon]}</span>
       </div>
       <div class="rank">${u.rank} · Lvl ${u.level} · ${u.isMage?'Magie':WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
-      <div class="statline">
-        <span>ANG ${u.atk}</span><span>VER ${u.def}${buffNote}</span><span>GES ${u.spd}</span><span>HP ${Math.max(0,u.hp)}/${u.maxHp}</span>
+      <div class="statline-compact">
+        <span>ANG ${u.atk}</span><span>VER ${u.def}${buffNote}</span><span>GES ${u.spd}</span>
       </div>
-      <div class="hpbar-outer"><div class="hpbar-inner" style="width:${hpPct}%"></div></div>
-      ${u.isMage ? `<div class="statline" style="margin-top:4px;"><span>MP ${u.mag}/${u.maxMag}</span></div><div class="hpbar-outer"><div class="hpbar-inner" style="width:${magPct}%;background:linear-gradient(90deg,#5a4a8f,#a78bc9);"></div></div>` : ''}
-      ${opts.showXp!==false ? `<div class="xpbar-outer"><div class="xpbar-inner" style="width:${xpPct}%"></div></div>` : ''}
+      <div class="stat-row"><span class="stat-label">HP</span><span class="stat-num">${Math.max(0,u.hp)}/${u.maxHp}</span><div class="mini-bar"><div class="mini-bar-fill hp" style="width:${hpPct}%"></div></div></div>
+      <div class="stat-row"><span class="stat-label">MP</span><span class="stat-num">${u.isMage?u.mag:0}/${u.isMage?u.maxMag:0}</span><div class="mini-bar"><div class="mini-bar-fill mp" style="width:${magPct}%"></div></div></div>
+      ${opts.showXp!==false ? `<div class="stat-row"><span class="stat-label">XP</span><span class="stat-num">${u.xp}/100</span><div class="mini-bar"><div class="mini-bar-fill xp" style="width:${xpPct}%"></div></div></div>` : ''}
     </div>
   </div>`;
 }
@@ -1401,12 +1494,12 @@ function renderBattleScreen(){
   html += '<div id="battle-side">';
 
   if(battle.deploying){
-    if(battle.deploySelected){
-      html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.deploySelected)}</div>`;
-    }
     html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
       <button class="primary" data-action="confirm-deploy">Kampf beginnen</button>
     </div></div>`;
+    if(battle.deploySelected){
+      html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.deploySelected)}</div>`;
+    }
     html += `<div class="panel-box"><h3>Kampf-Chronik</h3><div class="battle-log">`;
     game.log.slice(0,10).forEach(l=> html += `<div class="entry">${l}</div>`);
     html += `</div></div>`;
@@ -1415,10 +1508,12 @@ function renderBattleScreen(){
     return html;
   }
 
-  // 1) Ausgewählter Charakter
-  if(battle.selected){
-    html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.selected)}</div>`;
-  }
+  // 1) Aktionen
+  html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
+    <button data-action="wait" ${battle.mode==='attacking'?'':'disabled'}>Warten</button>
+    <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
+    <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>
+  </div></div>`;
 
   // 2) Magie-Menü (nur wenn Magier ausgewählt, genug MP hat und mind. ein Ziel in Reichweite ist)
   if(battle.selected && battle.selected.isMage && battle.selected.team==='player' && !battle.selected.hasActed && mageHasCastableSpell(battle.selected)){
@@ -1436,12 +1531,12 @@ function renderBattleScreen(){
     html += `</div><div class="help-text" style="margin:8px 0 0;">Feuerball (Reichweite 2, Schaden) · Verteidigung (Reichweite 3, +10 Verteidigung für 2 Runden) · Heilung (Reichweite 3, +5 HP). Kann vor oder nach der Bewegung gewirkt werden, wie ein Angriff. „Abbruch" wählt keinen Spruch und beendet den Zug.</div></div>`;
   }
 
-  // 3) Aktionen
-  html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
-    <button data-action="wait" ${battle.mode==='attacking'?'':'disabled'}>Warten</button>
-    <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
-    <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>
-  </div></div>`;
+  // 3) Charakter (eigene Einheit ausgewählt, oder Gegner inspiziert)
+  if(battle.selected){
+    html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.selected)}</div>`;
+  } else if(battle.inspecting && battle.inspecting.alive){
+    html += `<div class="panel-box"><h3>Gegner</h3>${unitCardHtml(battle.inspecting)}</div>`;
+  }
 
   // 4) Kampf-Chronik
   html += `<div class="panel-box"><h3>Kampf-Chronik</h3><div class="battle-log">`;
@@ -1458,7 +1553,7 @@ function renderBattleScreen(){
   });
   html += `</div></div>`;
 
-  html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen.${battle.specialTiles && battle.specialTiles.length ? ' Gegner versuchen zu Beginn, Wachtürme/Burg zu besetzen und zu halten — wer zuerst dort ist, sichert sich den Verteidigungsbonus.' : ''}</div></div>`;
+  html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen. Ein Klick auf eine feindliche Einheit (wenn gerade keine eigene aktiv ist) zeigt deren Bewegungsradius in Rot sowie ihre Werte.${battle.specialTiles && battle.specialTiles.length ? ' Gegner versuchen zu Beginn, Wachtürme/Burg zu besetzen und zu halten — wer zuerst dort ist, sichert sich den Verteidigungsbonus.' : ''}</div></div>`;
   html += `<div class="panel-box"><h3>Umzingelung</h3><div class="help-text" style="margin-bottom:0;">Steht neben dem Angreifer noch mind. ein weiterer Verbündeter direkt am Ziel an, steigen Trefferchance (+${FLANK_BONUS.hit} pro zusätzlichem Angreifer) und Schaden (+${FLANK_BONUS.dmg}). Gilt für beide Seiten.</div></div>`;
 
   html += '</div></div>'; // battle-side, battle-wrap
@@ -1519,11 +1614,19 @@ function drawBattleCanvas(){
       ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
     });
   }
+  // Bewegungsradius einer inspizierten feindlichen Einheit (rot)
+  if(battle.inspectRange){
+    ctx.fillStyle = 'rgba(163,69,59,0.35)';
+    Object.keys(battle.inspectRange).forEach(k=>{
+      const [x,y]=k.split(',').map(Number);
+      ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+    });
+  }
   // units
   battle.units.filter(u=>u.alive).forEach(u=>{
     const cx = u.x*TILE+TILE/2, cy=u.y*TILE+TILE/2;
     let fill = u.team==='enemy' ? '#a3453b' : (u.isAlly ? '#5f8f61' : (u.isMage ? '#7a5ea8' : '#c6a153'));
-    if(battle.selected===u || battle.deploySelected===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,13,0,Math.PI*2); ctx.stroke(); }
+    if(battle.selected===u || battle.deploySelected===u || battle.inspecting===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,13,0,Math.PI*2); ctx.stroke(); }
     ctx.fillStyle=fill;
     ctx.beginPath(); ctx.arc(cx,cy,11,0,Math.PI*2); ctx.fill();
     ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=1; ctx.stroke();
@@ -1540,6 +1643,20 @@ function drawBattleCanvas(){
       ctx.fillRect(u.x*TILE,u.y*TILE,TILE,TILE);
     }
   });
+  // Schadens-/Treffer-Anzeigen der letzten Aktion
+  if(battle.damagePopups && battle.damagePopups.length){
+    const tileCounts = {};
+    battle.damagePopups.forEach(p=>{
+      const key=p.x+','+p.y;
+      const idx = tileCounts[key]||0; tileCounts[key]=idx+1;
+      const px = p.x*TILE+TILE/2, py = p.y*TILE - 4 - idx*14;
+      ctx.font='bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.lineWidth=3; ctx.strokeStyle='rgba(0,0,0,0.6)';
+      ctx.strokeText(p.text, px, py);
+      ctx.fillStyle=p.color;
+      ctx.fillText(p.text, px, py);
+    });
+  }
   canvas.onclick = (evt)=>{
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
@@ -1556,6 +1673,7 @@ function attachHandlers(){
     el.addEventListener('click', (e)=>{
       const action = el.getAttribute('data-action');
       if(action==='newgame'){ if(confirm('Neues Spiel starten? Der aktuelle Fortschritt geht verloren.')) { initGame(); render(); } }
+      else if(action==='start-game'){ screen='world'; render(); }
       else if(action==='toggle-music'){ toggleMusic(); render(); }
       else if(action==='toggle-sfx'){ toggleSfx(); render(); }
       else if(action==='select-loc'){
