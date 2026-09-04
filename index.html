@@ -805,6 +805,9 @@ function validSpellTargets(mage, spellKey){
     return manhattan(mage,u) <= spell.range;
   });
 }
+function mageHasCastableSpell(mage){
+  return Object.entries(SPELLS).some(([key,spell]) => mage.mag>=spell.cost && validSpellTargets(mage,key).length>0);
+}
 function castSpell(mage, target, spellKey){
   const spell = SPELLS[spellKey];
   if(mage.mag < spell.cost) return;
@@ -874,8 +877,12 @@ function moveSelectedTo(x,y){
   u.x=x; u.y=y; u.hasMoved=true;
   battle.moveRange=null;
   const targets = adjacentEnemies(u);
+  const canCast = u.isMage && mageHasCastableSpell(u);
   if(targets.length){
     battle.attackRange=new Set(targets.map(t=>t.x+','+t.y));
+    battle.mode='attacking';
+  } else if(canCast){
+    battle.attackRange=null;
     battle.mode='attacking';
   } else {
     u.hasActed=true;
@@ -916,17 +923,26 @@ function startCastingSpell(spellKey){
   battle.mode = 'spellTargeting';
   render();
 }
-function cancelSpell(){
+function cancelSpellTargeting(){
+  // Ungültiger Klick während der Zielauswahl (z.B. Fehlklick): zurück zur vorherigen Auswahl, Zug läuft weiter.
   const u = battle.selected;
   battle.castingSpell = null;
   if(u && !u.hasActed){
-    battle.moveRange = computeReachable(u);
+    battle.moveRange = u.hasMoved ? null : computeReachable(u);
     const targets = adjacentEnemies(u);
     battle.attackRange = targets.length ? new Set(targets.map(t=>t.x+','+t.y)) : null;
-    battle.mode = 'moving';
+    battle.mode = u.hasMoved ? 'attacking' : 'moving';
   } else {
     battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
   }
+  render();
+}
+function abortMageTurn(){
+  // "Abbruch"-Button: bewusst keinen Spruch wirken, Zug des Magiers endet sofort (analog "Warten").
+  const u = battle.selected;
+  battle.castingSpell = null;
+  if(u) u.hasActed = true;
+  battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
   render();
 }
 function handleDeployClick(x,y){
@@ -986,7 +1002,7 @@ function onTileClick(x,y){
     if(u && battle.attackRange && battle.attackRange.has(key)){
       castSpell(battle.selected, u, battle.castingSpell);
     } else {
-      cancelSpell();
+      cancelSpellTargeting();
     }
   }
 }
@@ -1086,10 +1102,16 @@ function tickBuffs(){
     }
   });
 }
+function regenMana(){
+  battle.units.forEach(u=>{
+    if(u.isMage && u.alive) u.mag = Math.min(u.maxMag, u.mag+1);
+  });
+}
 function finishEnemyPhase(){
   battle.units.forEach(u=>{ u.hasMoved=false; u.hasActed=false; });
   applyTileHealing();
   tickBuffs();
+  regenMana();
   battle.phase='player'; battle.mode='idle'; battle.turnNumber++; battle.enemyIdx=0;
   render();
 }
@@ -1379,7 +1401,6 @@ function renderBattleScreen(){
   html += '<div id="battle-side">';
 
   if(battle.deploying){
-    html += `<div class="panel-box"><h3>Truppen aufstellen</h3><div class="help-text" style="margin-bottom:0;">Klicke eine eigene Einheit an und danach ein Feld in den unteren zwei Reihen (grün markiert), um sie dorthin zu versetzen oder mit einer anderen Einheit zu tauschen. Weiter oben ist keine Aufstellung möglich.</div></div>`;
     if(battle.deploySelected){
       html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.deploySelected)}</div>`;
     }
@@ -1389,10 +1410,45 @@ function renderBattleScreen(){
     html += `<div class="panel-box"><h3>Kampf-Chronik</h3><div class="battle-log">`;
     game.log.slice(0,10).forEach(l=> html += `<div class="entry">${l}</div>`);
     html += `</div></div>`;
+    html += `<div class="panel-box"><h3>Truppen aufstellen</h3><div class="help-text" style="margin-bottom:0;">Klicke eine eigene Einheit an und danach ein Feld in den unteren zwei Reihen (grün markiert), um sie dorthin zu versetzen oder mit einer anderen Einheit zu tauschen. Weiter oben ist keine Aufstellung möglich.</div></div>`;
     html += '</div></div>';
     return html;
   }
 
+  // 1) Ausgewählter Charakter
+  if(battle.selected){
+    html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.selected)}</div>`;
+  }
+
+  // 2) Magie-Menü (nur wenn Magier ausgewählt, genug MP hat und mind. ein Ziel in Reichweite ist)
+  if(battle.selected && battle.selected.isMage && battle.selected.team==='player' && !battle.selected.hasActed && mageHasCastableSpell(battle.selected)){
+    const mage = battle.selected;
+    html += `<div class="panel-box"><h3>Magie (${mage.mag}/${mage.maxMag} MP)</h3><div class="action-row">`;
+    Object.entries(SPELLS).forEach(([key,spell])=>{
+      const targets = validSpellTargets(mage, key);
+      const disabled = mage.mag < spell.cost || targets.length===0;
+      const active = battle.castingSpell===key;
+      html += `<button data-action="cast-spell" data-spell="${key}" ${disabled?'disabled':''} ${active?'class="primary"':''}>${spell.name} (${spell.cost} MP)</button>`;
+    });
+    if(battle.mode==='spellTargeting'){
+      html += `<button data-action="cancel-spell">Abbruch</button>`;
+    }
+    html += `</div><div class="help-text" style="margin:8px 0 0;">Feuerball (Reichweite 2, Schaden) · Verteidigung (Reichweite 3, +10 Verteidigung für 2 Runden) · Heilung (Reichweite 3, +5 HP). Kann vor oder nach der Bewegung gewirkt werden, wie ein Angriff. „Abbruch" wählt keinen Spruch und beendet den Zug.</div></div>`;
+  }
+
+  // 3) Aktionen
+  html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
+    <button data-action="wait" ${battle.mode==='attacking'?'':'disabled'}>Warten</button>
+    <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
+    <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>
+  </div></div>`;
+
+  // 4) Kampf-Chronik
+  html += `<div class="panel-box"><h3>Kampf-Chronik</h3><div class="battle-log">`;
+  game.log.slice(0,10).forEach(l=> html += `<div class="entry">${l}</div>`);
+  html += `</div></div>`;
+
+  // 5) Tutorial-/Hilfe-Boxen
   const presentTypes = new Set();
   for(let y=0;y<battle.size;y++) for(let x=0;x<battle.size;x++) presentTypes.add(battle.grid[y][x]);
   html += `<div class="panel-box"><h3>Gelände</h3><div class="legend">`;
@@ -1404,33 +1460,6 @@ function renderBattleScreen(){
 
   html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen.${battle.specialTiles && battle.specialTiles.length ? ' Gegner versuchen zu Beginn, Wachtürme/Burg zu besetzen und zu halten — wer zuerst dort ist, sichert sich den Verteidigungsbonus.' : ''}</div></div>`;
   html += `<div class="panel-box"><h3>Umzingelung</h3><div class="help-text" style="margin-bottom:0;">Steht neben dem Angreifer noch mind. ein weiterer Verbündeter direkt am Ziel an, steigen Trefferchance (+${FLANK_BONUS.hit} pro zusätzlichem Angreifer) und Schaden (+${FLANK_BONUS.dmg}). Gilt für beide Seiten.</div></div>`;
-
-  if(battle.selected){
-    html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.selected)}</div>`;
-    if(battle.selected.isMage && battle.selected.team==='player' && !battle.selected.hasActed){
-      const mage = battle.selected;
-      html += `<div class="panel-box"><h3>Magie (${mage.mag}/${mage.maxMag} MP)</h3><div class="action-row">`;
-      Object.entries(SPELLS).forEach(([key,spell])=>{
-        const disabled = mage.mag < spell.cost || battle.mode==='attacking';
-        const active = battle.castingSpell===key;
-        html += `<button data-action="cast-spell" data-spell="${key}" ${disabled?'disabled':''} ${active?'class="primary"':''}>${spell.name} (${spell.cost} MP)</button>`;
-      });
-      if(battle.mode==='spellTargeting'){
-        html += `<button data-action="cancel-spell">Abbrechen</button>`;
-      }
-      html += `</div><div class="help-text" style="margin:8px 0 0;">Feuerball (Reichweite 2, Schaden) · Verteidigung (Reichweite 3, +10 Verteidigung für 2 Runden) · Heilung (Reichweite 3, +5 HP). Nahkampf ist bei Magiern stark abgeschwächt.</div></div>`;
-    }
-  }
-
-  html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
-    <button data-action="wait" ${battle.mode==='attacking'?'':'disabled'}>Warten</button>
-    <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
-    <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>
-  </div></div>`;
-
-  html += `<div class="panel-box"><h3>Kampf-Chronik</h3><div class="battle-log">`;
-  game.log.slice(0,10).forEach(l=> html += `<div class="entry">${l}</div>`);
-  html += `</div></div>`;
 
   html += '</div></div>'; // battle-side, battle-wrap
 
@@ -1547,7 +1576,7 @@ function attachHandlers(){
       else if(action==='retreat'){ if(confirm('Wirklich zurückziehen? Dies zählt als Niederlage für die Weltkonsequenzen.')) retreatBattle(); }
       else if(action==='confirm-deploy'){ confirmDeployment(); }
       else if(action==='cast-spell'){ startCastingSpell(el.getAttribute('data-spell')); }
-      else if(action==='cancel-spell'){ cancelSpell(); }
+      else if(action==='cancel-spell'){ abortMageTurn(); }
       else if(action==='end-battle'){ endBattle(battle.outcome); }
       else if(action==='modal-continue'){
         const m = modalQueue.shift();
