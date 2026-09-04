@@ -136,6 +136,53 @@ const FLANK_BONUS = { hit:10, dmg:2 }; // pro zusätzlichem angrenzenden Verbün
 const TILE = 32;
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
 
+/* ===================== Musik ===================== */
+// Sucht im Ordner "audio" (relativ zur HTML-Datei) nach overworld.mp3 / battle.mp3.
+// Sind die Dateien nicht vorhanden, wird das Fehlen still ignoriert (nur Konsolen-Hinweis).
+const AUDIO_FILES = { overworld:'audio/overworld.mp3', battle:'audio/battle.mp3' };
+const AUDIO = {};
+Object.entries(AUDIO_FILES).forEach(([key, path])=>{
+  const a = new Audio(path);
+  a.loop = true;
+  a.volume = 0.45;
+  a.preload = 'auto';
+  a.__unavailable = false;
+  a.addEventListener('error', ()=>{
+    a.__unavailable = true;
+    console.warn(`Musikdatei "${path}" wurde nicht gefunden – Wiedergabe übersprungen.`);
+  });
+  AUDIO[key] = a;
+});
+let musicEnabled = true;
+let musicKind = null; // aktuell aktiver Track: 'overworld' | 'battle' | null
+
+function desiredMusicKind(){ return screen==='battle' ? 'battle' : 'overworld'; }
+
+function applyMusic(){
+  const desired = desiredMusicKind();
+  if(desired !== musicKind){
+    Object.values(AUDIO).forEach(a=>{ a.pause(); });
+    musicKind = desired;
+    const a = AUDIO[desired];
+    if(a && !a.__unavailable) { try{ a.currentTime = 0; }catch(e){} }
+  }
+  if(!musicEnabled){
+    Object.values(AUDIO).forEach(a=>a.pause());
+    return;
+  }
+  const a = AUDIO[desired];
+  if(!a || a.__unavailable) return;
+  if(a.paused){
+    const p = a.play();
+    if(p && p.catch) p.catch(()=>{ /* Autoplay evtl. noch durch Browser blockiert, bis zur nächsten Nutzerinteraktion */ });
+  }
+}
+function toggleMusic(){
+  musicEnabled = !musicEnabled;
+  applyMusic();
+}
+
+
 /* ===================== RNG ===================== */
 function mulberry32(seed){
   return function(){
@@ -657,6 +704,7 @@ function render(){
   appEl.innerHTML = html;
   attachHandlers();
   if(screen==='battle') drawBattleCanvas();
+  applyMusic();
 }
 
 function renderHeader(){
@@ -667,6 +715,7 @@ function renderHeader(){
     </div>
     <div class="right">
       <span class="day-badge">Tag ${game.day}</span>
+      <button data-action="toggle-music">${musicEnabled ? '🔊 Musik an' : '🔇 Musik aus'}</button>
       <button data-action="newgame">Neues Spiel</button>
     </div>
   </div>`;
@@ -889,6 +938,7 @@ function attachHandlers(){
     el.addEventListener('click', (e)=>{
       const action = el.getAttribute('data-action');
       if(action==='newgame'){ if(confirm('Neues Spiel starten? Der aktuelle Fortschritt geht verloren.')) { initGame(); render(); } }
+      else if(action==='toggle-music'){ toggleMusic(); render(); }
       else if(action==='select-loc'){
         const kind = el.getAttribute('data-kind');
         const idx = Number(el.getAttribute('data-idx'));
