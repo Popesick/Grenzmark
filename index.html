@@ -58,6 +58,7 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 .roster-card .badge.weapon-SCHWERT{border-color:#8fa8c9;color:#8fa8c9;}
 .roster-card .badge.weapon-AXT{border-color:#c98f6b;color:#c98f6b;}
 .roster-card .badge.weapon-SPEER{border-color:#a7c98f;color:#a7c98f;}
+.roster-card .badge.weapon-MAGIE{border-color:#a78bc9;color:#a78bc9;}
 .portrait-wrap{flex:0 0 46%;border-radius:6px;overflow:hidden;position:relative;border:1px solid var(--line-soft);background:#111528;align-self:stretch;min-height:78px;}
 .portrait-img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;}
 .portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:26px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
@@ -169,7 +170,8 @@ const SFX_FILES = {
   death_m1: 'audio/effects/death_m1.mp3',
   death_m2: 'audio/effects/death_m2.mp3',
   death_w1: 'audio/effects/death_w1.mp3',
-  death_w2: 'audio/effects/death_w2.mp3'
+  death_w2: 'audio/effects/death_w2.mp3',
+  ping:     'audio/effects/ping.mp3'
 };
 const SFX = {};
 Object.entries(SFX_FILES).forEach(([key, path])=>{
@@ -294,24 +296,40 @@ function makeMerc(id, usedNames){
   const maxHp = randInt(15,25);
   const n = randomName(usedNames);
   return {
-    id, name: n.name, gender: n.gender, team:'player', isAlly:false,
+    id, name: n.name, gender: n.gender, team:'player', isAlly:false, isMage:false,
     weapon, level:1, rank:'Söldner',
-    atk: randInt(1,10), def: randInt(1,10), spd: randInt(1,10), mag:0,
+    atk: randInt(1,10), def: randInt(1,10), spd: randInt(1,10), mag:0, maxMag:0,
+    maxHp, hp:maxHp, xp:0,
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false
+  };
+}
+function findGenderForName(name){
+  const entry = MERC_NAMES.find(e=>e.name===name);
+  return entry ? entry.gender : 'm';
+}
+function makeMageMerc(id, name){
+  const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
+  const maxHp = randInt(15,25);
+  const maxMag = randInt(11,19);
+  return {
+    id, name, gender: findGenderForName(name), team:'player', isAlly:false, isMage:true,
+    weapon, level:1, rank:'Magier',
+    atk: randInt(1,10), def: randInt(1,10), spd: randInt(1,10), mag:maxMag, maxMag,
     maxHp, hp:maxHp, xp:0,
     x:0,y:0, alive:true, hasMoved:false, hasActed:false
   };
 }
 
 function makeFirstAllyUnit(){
-  return { id:'ally1', name:'Roderick', gender:'m', team:'player', isAlly:true,
+  return { id:'ally1', name:'Roderick', gender:'m', team:'player', isAlly:true, isMage:false,
     weapon:'AXT', level:1, rank:'Verbündeter',
-    atk:10, def:10, spd:10, mag:0, maxHp:25, hp:25, xp:0,
+    atk:10, def:10, spd:10, mag:0, maxMag:0, maxHp:25, hp:25, xp:0,
     x:0,y:0, alive:true, hasMoved:false, hasActed:false };
 }
 function makeSecondAllyUnit(){
-  return { id:'ally2', name:'Ysolde', gender:'w', team:'player', isAlly:true,
+  return { id:'ally2', name:'Ysolde', gender:'w', team:'player', isAlly:true, isMage:false,
     weapon:'SPEER', level:5, rank:'Verbündete',
-    atk:15, def:15, spd:15, mag:0, maxHp:35, hp:35, xp:0,
+    atk:15, def:15, spd:15, mag:0, maxMag:0, maxHp:35, hp:35, xp:0,
     x:0,y:0, alive:true, hasMoved:false, hasActed:false };
 }
 
@@ -324,8 +342,13 @@ let modalQueue = []; // Warteschlange für Dialogboxen (neue Kämpfer, Aufträge
 
 function initGame(){
   const usedNames = new Set();
-  const mercs = [];
-  for(let i=0;i<5;i++) mercs.push(makeMerc('m'+i, usedNames));
+  // Genau einer von Hilda/Joric ist als Magier/-in in jeder Party dabei, nie beide, nie keiner.
+  const mageCandidate = Math.random()<0.5 ? 'Hilda' : 'Joric';
+  const excludedCandidate = mageCandidate==='Hilda' ? 'Joric' : 'Hilda';
+  usedNames.add(excludedCandidate);
+  const mercs = [makeMageMerc('m0', mageCandidate)];
+  usedNames.add(mageCandidate);
+  for(let i=1;i<5;i++) mercs.push(makeMerc('m'+i, usedNames));
 
   const villages = [0,1,2].map(i=>({id:'dorf'+i, idx:i, name:'Dorf '+(i+1), liberated:false}));
   const camps = [0,1,2].map(i=>({id:'lager'+i, idx:i, name:'Banditenlager '+(i+1), visible:false, cleared:false}));
@@ -334,6 +357,7 @@ function initGame(){
   game = {
     day:1,
     mercs,
+    excludedMageName: excludedCandidate,
     firstAlly:{ unit: makeFirstAllyUnit(), joined:false, active:false, permanent:false },
     secondAlly:{ unit: makeSecondAllyUnit(), joined:false },
     world:{ villages, camps, castles, activeCastle:0 },
@@ -357,7 +381,9 @@ function logMsg(text){
   if(game.log.length>150) game.log.length=150;
 }
 function queueModal(text, onClose, action, unit){
+  const wasEmpty = modalQueue.length===0;
   modalQueue.push({text, onClose: onClose||null, action: action||'dismiss', unit: unit||null});
+  if(wasEmpty) playSfx('ping');
 }
 
 /* ===================== Verbündeten-Logik ===================== */
@@ -418,9 +444,9 @@ function createLeveledMerc(level, usedNames){
   const bonus = level-1;
   const maxHp = randInt(15,25)+bonus*3;
   return {
-    id:'king'+Date.now()+randInt(0,999), name:n.name, gender:n.gender, team:'player', isAlly:false,
+    id:'king'+Date.now()+randInt(0,999), name:n.name, gender:n.gender, team:'player', isAlly:false, isMage:false,
     weapon, level, rank:'Söldner',
-    atk:randInt(1,10)+bonus, def:randInt(1,10)+bonus, spd:randInt(1,10)+bonus, mag:0,
+    atk:randInt(1,10)+bonus, def:randInt(1,10)+bonus, spd:randInt(1,10)+bonus, mag:0, maxMag:0,
     maxHp, hp:maxHp, xp:0,
     x:0,y:0, alive:true, hasMoved:false, hasActed:false
   };
@@ -431,6 +457,7 @@ function checkCastlesCompleted(){
   const frontDone = game.world.activeCastle >= game.world.castles.length;
   if(allSafe && frontDone){
     const usedNames = new Set(game.mercs.map(m=>m.name));
+    usedNames.add(game.excludedMageName);
     const merc = createLeveledMerc(10, usedNames);
     game.mercs.push(merc);
     logMsg(`${merc.name} (Level 10) schließt sich als Verstärkung des Königs der Truppe an.`);
@@ -465,17 +492,25 @@ function levelUp(unit){
   const g=()=>randInt(0,2);
   unit.atk+=g(); unit.def+=g(); unit.spd+=g();
   const hpg=g(); unit.maxHp+=hpg; unit.hp=Math.min(unit.maxHp,unit.hp+hpg);
+  if(unit.isMage){
+    const magGain = randInt(0,3);
+    unit.maxMag+=magGain; unit.mag=Math.min(unit.maxMag,unit.mag+magGain);
+  }
   logMsg(`${unit.name} erreicht Level ${unit.level}.`);
   if(unit.level>=20 && !unit.promoted){ promote(unit); }
 }
 function promote(unit){
   unit.promoted=true;
   unit.level=1;
-  unit.rank='Hauptmann';
+  unit.rank = unit.isMage ? 'Erzmagier' : 'Hauptmann';
   const b=()=>randInt(1,5);
   unit.atk+=b(); unit.def+=b(); unit.spd+=b();
   const hb=b(); unit.maxHp+=hb; unit.hp=unit.maxHp;
-  logMsg(`${unit.name} wird zum Hauptmann befördert!`);
+  if(unit.isMage){
+    const magGain = b();
+    unit.maxMag+=magGain; unit.mag=unit.maxMag;
+  }
+  logMsg(`${unit.name} wird zum ${unit.rank} befördert!`);
 }
 
 /* ===================== Weltzeit / Burgen ===================== */
@@ -617,7 +652,7 @@ function generateBattle(loc){
   }
 
   const roster = getActivePlayerRoster();
-  roster.forEach(u=>{ u.alive=true; u.hp=u.maxHp; u.hasMoved=false; u.hasActed=false; u.team='player'; });
+  roster.forEach(u=>{ u.alive=true; u.hp=u.maxHp; u.hasMoved=false; u.hasActed=false; u.team='player'; u.defBuff=0; u.defBuffRounds=0; });
 
   const groups = getEnemyGroups(loc);
   const enemies=[];
@@ -643,7 +678,7 @@ function generateBattle(loc){
     for(let i=cand.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [cand[i],cand[j]]=[cand[j],cand[i]]; }
     return cand;
   }
-  const pSpawns = findSpawnTiles([size-1,size-2,size-3], roster.length);
+  const pSpawns = findSpawnTiles([size-1,size-2], roster.length);
   roster.forEach((u,i)=>{ const s=pSpawns[i]||[i%size,size-1]; u.x=s[0]; u.y=s[1]; });
   const eSpawns = findSpawnTiles([0,1,2], enemies.length);
   enemies.forEach((e,i)=>{ const s=eSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
@@ -651,7 +686,8 @@ function generateBattle(loc){
   battle = {
     loc, grid, size, units:[...roster,...enemies], specialTiles,
     phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
-    turnNumber:1, enemyIdx:0, outcome:null, lastAttackerId:null
+    turnNumber:1, enemyIdx:0, outcome:null, lastAttackerId:null,
+    deploying:true, deploySelected:null, castingSpell:null
   };
 }
 
@@ -717,7 +753,8 @@ function attackOnce(attacker, defender, isCounter){
   if(hit){
     let atkVal = attacker.atk;
     if(isCounter) atkVal = atkVal*0.8;
-    let dmg = Math.round(atkVal) + tri.dmg + flank*FLANK_BONUS.dmg - defender.def - terrainDef;
+    let dmg = Math.round(atkVal) + tri.dmg + flank*FLANK_BONUS.dmg - defender.def - (defender.defBuff||0) - terrainDef;
+    if(attacker.isMage) dmg = Math.round(dmg*0.25); // Nahkampfangriffe von Magiern sind stark abgeschwächt
     dmg = Math.max(1, dmg);
     defender.hp -= dmg;
     const flankNote = flank>0 ? ` [Umzingelt von ${flank} weiteren ${attacker.team==='enemy'?'Gegnern':'Verbündeten'}: +Schaden/Trefferchance]` : '';
@@ -750,6 +787,63 @@ function checkBattleEnd(){
   const playersAlive = battle.units.some(u=>u.team==='player' && u.alive);
   if(!enemiesAlive){ battle.outcome='victory'; logMsg('Sieg! Alle Gegner wurden besiegt.'); }
   else if(!playersAlive){ battle.outcome='defeat'; logMsg('Niederlage! Die Truppe wurde überwältigt.'); }
+}
+
+/* ===================== Magie ===================== */
+const SPELLS = {
+  feuerball:    { name:'Feuerball',    cost:2, range:2, targetTeam:'enemy' },
+  verteidigung: { name:'Verteidigung', cost:3, range:3, targetTeam:'ally'  },
+  heilung:      { name:'Heilung',      cost:2, range:3, targetTeam:'ally'  }
+};
+function manhattan(a,b){ return Math.abs(a.x-b.x)+Math.abs(a.y-b.y); }
+function validSpellTargets(mage, spellKey){
+  const spell = SPELLS[spellKey];
+  return battle.units.filter(u=>{
+    if(!u.alive) return false;
+    if(spell.targetTeam==='enemy' && u.team===mage.team) return false;
+    if(spell.targetTeam==='ally' && u.team!==mage.team) return false;
+    return manhattan(mage,u) <= spell.range;
+  });
+}
+function castSpell(mage, target, spellKey){
+  const spell = SPELLS[spellKey];
+  if(mage.mag < spell.cost) return;
+  mage.mag -= spell.cost;
+  if(spellKey==='feuerball'){
+    const terrainDef = TERRAIN[battle.grid[target.y][target.x]].def;
+    let hitChance = 70 + (mage.spd - target.spd);
+    hitChance = Math.max(5, Math.min(95, hitChance));
+    playSfx('hit');
+    applyXP(mage, randInt(5,10));
+    if(Math.random()*100 < hitChance){
+      let dmg = Math.round(mage.atk) - target.def - (target.defBuff||0) - terrainDef;
+      dmg = Math.max(1, dmg);
+      target.hp -= dmg;
+      logMsg(`${mage.name} trifft ${target.name} mit einem Feuerball (${dmg} Schaden).`);
+      if(target.hp<=0){
+        target.hp=0; target.alive=false;
+        applyXP(mage, randInt(20,40));
+        logMsg(`${target.name} wurde besiegt.`);
+        playDeathSfx(target);
+      }
+    } else {
+      logMsg(`${mage.name}s Feuerball verfehlt ${target.name}.`);
+    }
+    checkBattleEnd();
+  } else if(spellKey==='verteidigung'){
+    target.defBuff = 10;
+    target.defBuffRounds = 2;
+    logMsg(`${mage.name} verstärkt die Verteidigung von ${target.name} um 10 (für 2 Runden).`);
+    applyXP(mage, Math.round(randInt(5,10)/2));
+  } else if(spellKey==='heilung'){
+    const before = target.hp;
+    target.hp = Math.min(target.maxHp, target.hp+5);
+    logMsg(`${mage.name} heilt ${target.name} um ${target.hp-before} HP.`);
+    applyXP(mage, 10);
+  }
+  mage.hasActed = true;
+  battle.selected=null; battle.attackRange=null; battle.moveRange=null; battle.castingSpell=null; battle.mode='idle';
+  render();
 }
 
 /* Spieler-Interaktion */
@@ -811,7 +905,57 @@ function waitAction(){
   battle.selected=null; battle.attackRange=null; battle.mode='idle';
   render();
 }
+function startCastingSpell(spellKey){
+  const mage = battle.selected;
+  if(!mage || !mage.isMage || mage.hasActed) return;
+  const spell = SPELLS[spellKey];
+  if(!spell || mage.mag < spell.cost) return;
+  battle.castingSpell = spellKey;
+  battle.moveRange = null;
+  battle.attackRange = new Set(validSpellTargets(mage, spellKey).map(t=>t.x+','+t.y));
+  battle.mode = 'spellTargeting';
+  render();
+}
+function cancelSpell(){
+  const u = battle.selected;
+  battle.castingSpell = null;
+  if(u && !u.hasActed){
+    battle.moveRange = computeReachable(u);
+    const targets = adjacentEnemies(u);
+    battle.attackRange = targets.length ? new Set(targets.map(t=>t.x+','+t.y)) : null;
+    battle.mode = 'moving';
+  } else {
+    battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
+  }
+  render();
+}
+function handleDeployClick(x,y){
+  const inZone = y >= battle.size-2;
+  const clicked = unitAt(x,y);
+  if(!battle.deploySelected){
+    if(clicked && clicked.team==='player'){ battle.deploySelected = clicked; render(); }
+    return;
+  }
+  const sel = battle.deploySelected;
+  if(!inZone){ battle.deploySelected=null; render(); return; }
+  if(clicked && clicked!==sel && clicked.team==='player'){
+    const tx=clicked.x, ty=clicked.y;
+    clicked.x=sel.x; clicked.y=sel.y;
+    sel.x=tx; sel.y=ty;
+  } else if(!clicked){
+    sel.x=x; sel.y=y;
+  }
+  battle.deploySelected=null;
+  render();
+}
+function confirmDeployment(){
+  if(!battle) return;
+  battle.deploying=false;
+  battle.deploySelected=null;
+  render();
+}
 function onTileClick(x,y){
+  if(battle.deploying){ handleDeployClick(x,y); return; }
   if(battle.phase!=='player' || battle.outcome) return;
   if(battle.mode==='idle'){
     const u=unitAt(x,y);
@@ -836,6 +980,14 @@ function onTileClick(x,y){
     const key=x+','+y;
     const u=unitAt(x,y);
     if(u && u.team==='enemy' && battle.attackRange && battle.attackRange.has(key)) performPlayerAttack(u);
+  } else if(battle.mode==='spellTargeting'){
+    const key=x+','+y;
+    const u=unitAt(x,y);
+    if(u && battle.attackRange && battle.attackRange.has(key)){
+      castSpell(battle.selected, u, battle.castingSpell);
+    } else {
+      cancelSpell();
+    }
   }
 }
 
@@ -926,16 +1078,25 @@ function applyTileHealing(){
     }
   });
 }
+function tickBuffs(){
+  battle.units.forEach(u=>{
+    if(u.defBuffRounds>0){
+      u.defBuffRounds--;
+      if(u.defBuffRounds<=0){ u.defBuffRounds=0; u.defBuff=0; }
+    }
+  });
+}
 function finishEnemyPhase(){
   battle.units.forEach(u=>{ u.hasMoved=false; u.hasActed=false; });
   applyTileHealing();
+  tickBuffs();
   battle.phase='player'; battle.mode='idle'; battle.turnNumber++; battle.enemyIdx=0;
   render();
 }
 
 /* Kampf-Abschluss -> Weltkonsequenzen */
 function endBattle(outcome){
-  battle.units.filter(u=>u.team==='player').forEach(u=>{ u.hp=u.maxHp; u.alive=true; });
+  battle.units.filter(u=>u.team==='player').forEach(u=>{ u.hp=u.maxHp; u.alive=true; u.defBuff=0; u.defBuffRounds=0; if(u.isMage) u.mag=u.maxMag; });
   const loc = battle.loc;
   const win = outcome==='victory';
   if(loc.kind==='village'){
@@ -1071,7 +1232,9 @@ function unitCardHtml(u, opts){
   opts = opts||{};
   const hpPct = Math.max(0, Math.round((u.hp/u.maxHp)*100));
   const xpPct = Math.min(100, u.xp);
+  const magPct = u.isMage ? Math.max(0, Math.round((u.mag/u.maxMag)*100)) : 0;
   const dead = u.alive===false;
+  const buffNote = u.defBuffRounds>0 ? ` · +${u.defBuff} VER (${u.defBuffRounds} Runde${u.defBuffRounds>1?'n':''})` : '';
   return `<div class="roster-card ${dead?'dead':''}">
     <div class="portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">
       ${portraitImgHtml(u)}
@@ -1079,13 +1242,14 @@ function unitCardHtml(u, opts){
     <div class="card-body">
       <div class="row1">
         <span class="name">${u.name}</span>
-        <span class="badge weapon-${u.weapon}">${WEAPON_LETTER[u.weapon]}</span>
+        <span class="badge weapon-${u.isMage?'MAGIE':u.weapon}">${u.isMage?'M':WEAPON_LETTER[u.weapon]}</span>
       </div>
-      <div class="rank">${u.rank} · Lvl ${u.level} · ${WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
+      <div class="rank">${u.rank} · Lvl ${u.level} · ${u.isMage?'Magie':WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
       <div class="statline">
-        <span>ANG ${u.atk}</span><span>VER ${u.def}</span><span>GES ${u.spd}</span><span>HP ${Math.max(0,u.hp)}/${u.maxHp}</span>
+        <span>ANG ${u.atk}</span><span>VER ${u.def}${buffNote}</span><span>GES ${u.spd}</span><span>HP ${Math.max(0,u.hp)}/${u.maxHp}</span>
       </div>
       <div class="hpbar-outer"><div class="hpbar-inner" style="width:${hpPct}%"></div></div>
+      ${u.isMage ? `<div class="statline" style="margin-top:4px;"><span>MP ${u.mag}/${u.maxMag}</span></div><div class="hpbar-outer"><div class="hpbar-inner" style="width:${magPct}%;background:linear-gradient(90deg,#5a4a8f,#a78bc9);"></div></div>` : ''}
       ${opts.showXp!==false ? `<div class="xpbar-outer"><div class="xpbar-inner" style="width:${xpPct}%"></div></div>` : ''}
     </div>
   </div>`;
@@ -1206,12 +1370,28 @@ function renderAnnouncementModal(){
 
 function renderBattleScreen(){
   const canvasPx = GRID_SIZE*TILE;
-  let html = `<div class="phase-banner">${battle.phase==='player' ? 'Spielerphase — Runde '+battle.turnNumber : 'Gegnerphase'}</div>`;
+  const phaseLabel = battle.deploying ? 'Aufstellungsphase' : (battle.phase==='player' ? 'Spielerphase — Runde '+battle.turnNumber : 'Gegnerphase');
+  let html = `<div class="phase-banner">${phaseLabel}</div>`;
   html += '<div id="battle-wrap">';
   html += `<div id="battle-canvas-holder" style="width:${canvasPx+16}px;height:${canvasPx+16}px;">
     <canvas id="battleCanvas" width="${canvasPx}" height="${canvasPx}"></canvas>
   </div>`;
   html += '<div id="battle-side">';
+
+  if(battle.deploying){
+    html += `<div class="panel-box"><h3>Truppen aufstellen</h3><div class="help-text" style="margin-bottom:0;">Klicke eine eigene Einheit an und danach ein Feld in den unteren zwei Reihen (grün markiert), um sie dorthin zu versetzen oder mit einer anderen Einheit zu tauschen. Weiter oben ist keine Aufstellung möglich.</div></div>`;
+    if(battle.deploySelected){
+      html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.deploySelected)}</div>`;
+    }
+    html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
+      <button class="primary" data-action="confirm-deploy">Kampf beginnen</button>
+    </div></div>`;
+    html += `<div class="panel-box"><h3>Kampf-Chronik</h3><div class="battle-log">`;
+    game.log.slice(0,10).forEach(l=> html += `<div class="entry">${l}</div>`);
+    html += `</div></div>`;
+    html += '</div></div>';
+    return html;
+  }
 
   const presentTypes = new Set();
   for(let y=0;y<battle.size;y++) for(let x=0;x<battle.size;x++) presentTypes.add(battle.grid[y][x]);
@@ -1227,6 +1407,19 @@ function renderBattleScreen(){
 
   if(battle.selected){
     html += `<div class="panel-box"><h3>Ausgewählt</h3>${unitCardHtml(battle.selected)}</div>`;
+    if(battle.selected.isMage && battle.selected.team==='player' && !battle.selected.hasActed){
+      const mage = battle.selected;
+      html += `<div class="panel-box"><h3>Magie (${mage.mag}/${mage.maxMag} MP)</h3><div class="action-row">`;
+      Object.entries(SPELLS).forEach(([key,spell])=>{
+        const disabled = mage.mag < spell.cost || battle.mode==='attacking';
+        const active = battle.castingSpell===key;
+        html += `<button data-action="cast-spell" data-spell="${key}" ${disabled?'disabled':''} ${active?'class="primary"':''}>${spell.name} (${spell.cost} MP)</button>`;
+      });
+      if(battle.mode==='spellTargeting'){
+        html += `<button data-action="cancel-spell">Abbrechen</button>`;
+      }
+      html += `</div><div class="help-text" style="margin:8px 0 0;">Feuerball (Reichweite 2, Schaden) · Verteidigung (Reichweite 3, +10 Verteidigung für 2 Runden) · Heilung (Reichweite 3, +5 HP). Nahkampf ist bei Magiern stark abgeschwächt.</div></div>`;
+    }
   }
 
   html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
@@ -1272,6 +1465,15 @@ function drawBattleCanvas(){
       ctx.fillText(t.icon, x*TILE+TILE/2, y*TILE+TILE/2);
     }
   }
+  // Aufstellungszone (untere zwei Reihen) während der Aufstellungsphase
+  if(battle.deploying){
+    ctx.fillStyle = 'rgba(95,143,97,0.22)';
+    for(let y=size-2;y<size;y++){
+      for(let x=0;x<size;x++){
+        ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+      }
+    }
+  }
   // move range
   if(battle.moveRange){
     ctx.fillStyle = 'rgba(91,122,166,0.45)';
@@ -1291,14 +1493,14 @@ function drawBattleCanvas(){
   // units
   battle.units.filter(u=>u.alive).forEach(u=>{
     const cx = u.x*TILE+TILE/2, cy=u.y*TILE+TILE/2;
-    let fill = u.team==='enemy' ? '#a3453b' : (u.isAlly ? '#5f8f61' : '#c6a153');
-    if(battle.selected===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,13,0,Math.PI*2); ctx.stroke(); }
+    let fill = u.team==='enemy' ? '#a3453b' : (u.isAlly ? '#5f8f61' : (u.isMage ? '#7a5ea8' : '#c6a153'));
+    if(battle.selected===u || battle.deploySelected===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,13,0,Math.PI*2); ctx.stroke(); }
     ctx.fillStyle=fill;
     ctx.beginPath(); ctx.arc(cx,cy,11,0,Math.PI*2); ctx.fill();
     ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=1; ctx.stroke();
     ctx.fillStyle= u.team==='enemy' ? '#fff' : '#1a1408';
     ctx.font='bold 11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(WEAPON_LETTER[u.weapon], cx, cy+1);
+    ctx.fillText(u.isMage ? 'M' : WEAPON_LETTER[u.weapon], cx, cy+1);
     // hp bar
     const pct = Math.max(0,u.hp/u.maxHp);
     ctx.fillStyle='#111528'; ctx.fillRect(u.x*TILE+4,u.y*TILE+2,TILE-8,3);
@@ -1343,6 +1545,9 @@ function attachHandlers(){
       else if(action==='wait'){ waitAction(); }
       else if(action==='end-phase'){ endPlayerPhase(); }
       else if(action==='retreat'){ if(confirm('Wirklich zurückziehen? Dies zählt als Niederlage für die Weltkonsequenzen.')) retreatBattle(); }
+      else if(action==='confirm-deploy'){ confirmDeployment(); }
+      else if(action==='cast-spell'){ startCastingSpell(el.getAttribute('data-spell')); }
+      else if(action==='cancel-spell'){ cancelSpell(); }
       else if(action==='end-battle'){ endBattle(battle.outcome); }
       else if(action==='modal-continue'){
         const m = modalQueue.shift();
@@ -1350,6 +1555,7 @@ function attachHandlers(){
           if(m.action==='restart'){ initGame(); }
           else if(m.onClose){ m.onClose(); }
         }
+        if(modalQueue.length) playSfx('ping');
         render();
       }
     });
