@@ -136,9 +136,9 @@ const FLANK_BONUS = { hit:10, dmg:2 }; // pro zusätzlichem angrenzenden Verbün
 const TILE = 32;
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
 
-/* ===================== Musik ===================== */
-// Sucht im Ordner "audio" (relativ zur HTML-Datei) nach overworld.mp3 / battle.mp3.
-// Sind die Dateien nicht vorhanden, wird das Fehlen still ignoriert (nur Konsolen-Hinweis).
+/* ===================== Musik & Soundeffekte ===================== */
+// Sucht im Ordner "audio" (relativ zur HTML-Datei) nach den Musik- und Effekt-Dateien.
+// Fehlt eine Datei, wird das Fehlen still ignoriert (nur Konsolen-Hinweis).
 const AUDIO_FILES = { overworld:'audio/overworld.mp3', battle:'audio/battle.mp3' };
 const AUDIO = {};
 Object.entries(AUDIO_FILES).forEach(([key, path])=>{
@@ -153,8 +153,29 @@ Object.entries(AUDIO_FILES).forEach(([key, path])=>{
   });
   AUDIO[key] = a;
 });
-let musicEnabled = true;
-let musicKind = null; // aktuell aktiver Track: 'overworld' | 'battle' | null
+
+const SFX_FILES = {
+  hit:      'audio/effects/hit.mp3',
+  death_m1: 'audio/effects/death_m1.mp3',
+  death_m2: 'audio/effects/death_m2.mp3',
+  death_w1: 'audio/effects/death_w1.mp3',
+  death_w2: 'audio/effects/death_w2.mp3'
+};
+const SFX = {};
+Object.entries(SFX_FILES).forEach(([key, path])=>{
+  const a = new Audio(path);
+  a.preload = 'auto';
+  a.volume = 0.7;
+  a.__unavailable = false;
+  a.addEventListener('error', ()=>{
+    a.__unavailable = true;
+    console.warn(`Soundeffekt-Datei "${path}" wurde nicht gefunden – Wiedergabe übersprungen.`);
+  });
+  SFX[key] = a;
+});
+
+let soundEnabled = true;
+let musicKind = null; // aktuell aktiver Musiktrack: 'overworld' | 'battle' | null
 
 function desiredMusicKind(){ return screen==='battle' ? 'battle' : 'overworld'; }
 
@@ -166,7 +187,7 @@ function applyMusic(){
     const a = AUDIO[desired];
     if(a && !a.__unavailable) { try{ a.currentTime = 0; }catch(e){} }
   }
-  if(!musicEnabled){
+  if(!soundEnabled){
     Object.values(AUDIO).forEach(a=>a.pause());
     return;
   }
@@ -177,10 +198,26 @@ function applyMusic(){
     if(p && p.catch) p.catch(()=>{ /* Autoplay evtl. noch durch Browser blockiert, bis zur nächsten Nutzerinteraktion */ });
   }
 }
-function toggleMusic(){
-  musicEnabled = !musicEnabled;
+function toggleSound(){
+  soundEnabled = !soundEnabled;
   applyMusic();
 }
+function playSfx(key){
+  if(!soundEnabled) return;
+  const src = SFX[key];
+  if(!src || src.__unavailable) return;
+  // cloneNode erlaubt überlappende Wiedergabe (z.B. mehrere Treffer kurz hintereinander)
+  const node = src.cloneNode(true);
+  node.volume = src.volume;
+  const p = node.play();
+  if(p && p.catch) p.catch(()=>{});
+}
+function playDeathSfx(unit){
+  const variant = Math.random()<0.5 ? 1 : 2;
+  const key = (unit.gender==='w' ? 'death_w' : 'death_m') + variant;
+  playSfx(key);
+}
+
 
 
 /* ===================== RNG ===================== */
@@ -203,11 +240,17 @@ function hashStr(s){
 function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
 
 /* ===================== Namen ===================== */
-const MERC_NAMES = ['Alrik','Beren','Cwen','Doran','Elric','Fenna','Gorm','Hilda','Ivar','Joric','Katla','Leif','Morna','Osric','Rurik'];
+const MERC_NAMES = [
+  {name:'Alrik',gender:'m'}, {name:'Beren',gender:'m'}, {name:'Cwen',gender:'w'},
+  {name:'Doran',gender:'m'}, {name:'Elric',gender:'m'}, {name:'Fenna',gender:'w'},
+  {name:'Gorm',gender:'m'}, {name:'Hilda',gender:'w'}, {name:'Ivar',gender:'m'},
+  {name:'Joric',gender:'m'}, {name:'Katla',gender:'w'}, {name:'Leif',gender:'m'},
+  {name:'Morna',gender:'w'}, {name:'Osric',gender:'m'}, {name:'Rurik',gender:'m'}
+];
 function randomName(usedSet){
   let n;
-  do{ n = MERC_NAMES[randInt(0,MERC_NAMES.length-1)]; } while(usedSet.has(n) && usedSet.size < MERC_NAMES.length);
-  usedSet.add(n);
+  do{ n = MERC_NAMES[randInt(0,MERC_NAMES.length-1)]; } while(usedSet.has(n.name) && usedSet.size < MERC_NAMES.length);
+  usedSet.add(n.name);
   return n;
 }
 
@@ -217,8 +260,9 @@ function bpForSpeed(spd){ return 8 + Math.floor(spd/10); }
 function makeMerc(id, usedNames){
   const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
   const maxHp = randInt(15,25);
+  const n = randomName(usedNames);
   return {
-    id, name: randomName(usedNames), team:'player', isAlly:false,
+    id, name: n.name, gender: n.gender, team:'player', isAlly:false,
     weapon, level:1, rank:'Söldner',
     atk: randInt(1,10), def: randInt(1,10), spd: randInt(1,10), mag:0,
     maxHp, hp:maxHp, xp:0,
@@ -227,13 +271,13 @@ function makeMerc(id, usedNames){
 }
 
 function makeFirstAllyUnit(){
-  return { id:'ally1', name:'Roderick', team:'player', isAlly:true,
+  return { id:'ally1', name:'Roderick', gender:'m', team:'player', isAlly:true,
     weapon:'AXT', level:1, rank:'Verbündeter',
     atk:10, def:10, spd:10, mag:0, maxHp:25, hp:25, xp:0,
     x:0,y:0, alive:true, hasMoved:false, hasActed:false };
 }
 function makeSecondAllyUnit(){
-  return { id:'ally2', name:'Ysolde', team:'player', isAlly:true,
+  return { id:'ally2', name:'Ysolde', gender:'w', team:'player', isAlly:true,
     weapon:'SPEER', level:5, rank:'Verbündete',
     atk:15, def:15, spd:15, mag:0, maxHp:35, hp:35, xp:0,
     x:0,y:0, alive:true, hasMoved:false, hasActed:false };
@@ -393,7 +437,7 @@ function generateBattle(loc){
     const maxHp = Math.floor(rng()*11)+15+bonus*3;
     enemies.push({
       id:'e'+i, name:(loc.kind==='castle'?'Belagerer':'Bandit')+' '+(i+1),
-      team:'enemy', isAlly:false, weapon:w, level:info.level, rank:'Gegner',
+      team:'enemy', isAlly:false, gender: rng()<0.5?'m':'w', weapon:w, level:info.level, rank:'Gegner',
       atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0,
       maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
     });
@@ -473,6 +517,7 @@ function attackOnce(attacker, defender, isCounter){
   if(isCounter) hitChance -= 20;
   hitChance = Math.max(5, Math.min(95, hitChance));
   const hit = Math.random()*100 < hitChance;
+  playSfx('hit');
   applyXP(attacker, randInt(5,10));
   if(hit){
     let atkVal = attacker.atk;
@@ -486,6 +531,7 @@ function attackOnce(attacker, defender, isCounter){
       defender.hp=0; defender.alive=false;
       applyXP(attacker, randInt(20,40));
       logMsg(`${defender.name} wurde besiegt.`);
+      playDeathSfx(defender);
       return {died:true};
     }
   } else {
@@ -715,7 +761,7 @@ function renderHeader(){
     </div>
     <div class="right">
       <span class="day-badge">Tag ${game.day}</span>
-      <button data-action="toggle-music">${musicEnabled ? '🔊 Musik an' : '🔇 Musik aus'}</button>
+      <button data-action="toggle-sound">${soundEnabled ? '🔊 Sound an' : '🔇 Sound aus'}</button>
       <button data-action="newgame">Neues Spiel</button>
     </div>
   </div>`;
@@ -938,7 +984,7 @@ function attachHandlers(){
     el.addEventListener('click', (e)=>{
       const action = el.getAttribute('data-action');
       if(action==='newgame'){ if(confirm('Neues Spiel starten? Der aktuelle Fortschritt geht verloren.')) { initGame(); render(); } }
-      else if(action==='toggle-music'){ toggleMusic(); render(); }
+      else if(action==='toggle-sound'){ toggleSound(); render(); }
       else if(action==='select-loc'){
         const kind = el.getAttribute('data-kind');
         const idx = Number(el.getAttribute('data-idx'));
