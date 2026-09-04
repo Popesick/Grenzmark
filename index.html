@@ -48,19 +48,22 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 #sidebar{width:290px;flex:0 0 290px;background:var(--panel);border-right:1px solid var(--line);padding:14px;overflow-y:auto;}
 #content{flex:1;padding:20px;overflow-y:auto;position:relative;}
 
-.roster-card{background:var(--panel-alt);border:1px solid var(--line-soft);border-radius:4px;padding:9px 10px;margin-bottom:8px;}
+.roster-card{background:var(--panel-alt);border:1px solid var(--line-soft);border-radius:4px;padding:9px;margin-bottom:8px;display:flex;gap:10px;align-items:stretch;}
 .roster-card.dead{opacity:.4;}
-.roster-card .row1{display:flex;align-items:center;gap:8px;}
-.roster-card .name-block{flex:1;min-width:0;}
+.roster-card .card-body{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:2px;}
+.roster-card .row1{display:flex;align-items:center;justify-content:space-between;gap:6px;}
 .roster-card .name{font-weight:600;font-size:14px;}
 .roster-card .rank{font-size:11px;color:var(--text-dim);}
-.roster-card .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid var(--line);color:var(--text-dim);margin-left:5px;flex:0 0 auto;}
+.roster-card .badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid var(--line);color:var(--text-dim);flex:0 0 auto;}
 .roster-card .badge.weapon-SCHWERT{border-color:#8fa8c9;color:#8fa8c9;}
 .roster-card .badge.weapon-AXT{border-color:#c98f6b;color:#c98f6b;}
 .roster-card .badge.weapon-SPEER{border-color:#a7c98f;color:#a7c98f;}
-.portrait-wrap{width:32px;height:32px;border-radius:50%;overflow:hidden;flex:0 0 32px;position:relative;border:1px solid var(--line-soft);background:#111528;}
-.portrait-img{width:100%;height:100%;object-fit:cover;display:block;}
-.portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:11px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);}
+.portrait-wrap{flex:0 0 46%;border-radius:6px;overflow:hidden;position:relative;border:1px solid var(--line-soft);background:#111528;align-self:stretch;min-height:78px;}
+.portrait-img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;}
+.portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:26px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
+.modal-portrait{width:88px;height:88px;border-radius:50%;overflow:hidden;margin:0 auto 14px;position:relative;border:2px solid var(--gold-dim);background:#111528;}
+.modal-portrait-img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;}
+.modal-portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:26px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
 .statline{display:flex;gap:8px;font-size:11px;color:var(--text-dim);margin-top:4px;flex-wrap:wrap;}
 .hpbar-outer,.xpbar-outer{height:6px;border-radius:3px;background:#111528;overflow:hidden;margin-top:5px;border:1px solid var(--line-soft);}
 .hpbar-inner{height:100%;background:linear-gradient(90deg,var(--success),#7fb37f);}
@@ -353,8 +356,8 @@ function logMsg(text){
   game.log.unshift(text);
   if(game.log.length>150) game.log.length=150;
 }
-function queueModal(text, onClose, action){
-  modalQueue.push({text, onClose: onClose||null, action: action||'dismiss'});
+function queueModal(text, onClose, action, unit){
+  modalQueue.push({text, onClose: onClose||null, action: action||'dismiss', unit: unit||null});
 }
 
 /* ===================== Verbündeten-Logik ===================== */
@@ -363,12 +366,12 @@ function grantFirstAllyIfNeeded(){
   if(!a.joined){
     a.joined=true; a.active=true;
     logMsg(`${a.unit.name} schließt sich als Verbündeter der Truppe an.`);
-    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`);
+    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`, null, 'dismiss', a.unit);
   }
   else if(!a.active && !a.permanent){
     a.active=true;
     logMsg(`${a.unit.name} schließt sich wieder deiner Party an.`);
-    queueModal(`${a.unit.name} schließt sich wieder deiner Party an.`);
+    queueModal(`${a.unit.name} schließt sich wieder deiner Party an.`, null, 'dismiss', a.unit);
   }
 }
 function allyLeavesOnCastleDefense(){
@@ -376,7 +379,7 @@ function allyLeavesOnCastleDefense(){
   if(a.joined && a.active && !a.permanent){
     a.active=false;
     logMsg(`${a.unit.name} verteidigt weiter sein Dorf und hat die Party verlassen. Er wird sich dir wieder anschließen, wenn du die Banditen angreifst.`);
-    queueModal(`${a.unit.name} verteidigt weiter sein Dorf und hat die Party verlassen. Er wird sich dir wieder anschließen, wenn du die Banditen angreifst.`);
+    queueModal(`${a.unit.name} verteidigt weiter sein Dorf und hat die Party verlassen. Er wird sich dir wieder anschließen, wenn du die Banditen angreifst.`, null, 'dismiss', a.unit);
   }
 }
 function checkAllyPermanent(){
@@ -387,7 +390,7 @@ function checkAllyPermanent(){
   if(v && c){
     a.permanent=true; a.active=true;
     logMsg(`${a.unit.name} wird dauerhaftes Mitglied der Truppe.`);
-    queueModal(`Alle Banditen wurden besiegt. ${a.unit.name} wird dauerhaftes Mitglied der Truppe.`);
+    queueModal(`Alle Banditen wurden besiegt. ${a.unit.name} wird dauerhaftes Mitglied der Truppe.`, null, 'dismiss', a.unit);
   }
 }
 function grantSecondAlly(){
@@ -395,7 +398,7 @@ function grantSecondAlly(){
   if(!a.joined){
     a.joined=true;
     logMsg(`${a.unit.name} schließt sich der Truppe an.`);
-    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`);
+    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`, null, 'dismiss', a.unit);
   }
 }
 function getActivePlayerRoster(){
@@ -433,7 +436,7 @@ function checkCastlesCompleted(){
     logMsg(`${merc.name} (Level 10) schließt sich als Verstärkung des Königs der Truppe an.`);
     queueModal(
       `Der König lobt euren Erfolg an der Nordgrenze. Er trägt euch auf, den Gegenschlag zu unterstützen und in feindliches Gebiet vorzudringen. ${merc.name} (Level 10) schließt sich als Verstärkung eurer Truppe an.`,
-      ()=>{ game.offensive.unlocked=true; }
+      ()=>{ game.offensive.unlocked=true; }, 'dismiss', merc
     );
   }
 }
@@ -1045,22 +1048,22 @@ function unitCardHtml(u, opts){
   const xpPct = Math.min(100, u.xp);
   const dead = u.alive===false;
   return `<div class="roster-card ${dead?'dead':''}">
-    <div class="row1">
-      <div class="portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">
-        <img class="portrait-img" src="${portraitPath(u)}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-        <div class="portrait-fallback">${initials(u.name)}</div>
-      </div>
-      <div class="name-block">
+    <div class="portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">
+      <img class="portrait-img" src="${portraitPath(u)}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <div class="portrait-fallback">${initials(u.name)}</div>
+    </div>
+    <div class="card-body">
+      <div class="row1">
         <span class="name">${u.name}</span>
+        <span class="badge weapon-${u.weapon}">${WEAPON_LETTER[u.weapon]}</span>
       </div>
-      <span class="badge weapon-${u.weapon}">${WEAPON_LETTER[u.weapon]}</span>
+      <div class="rank">${u.rank} · Lvl ${u.level} · ${WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
+      <div class="statline">
+        <span>ANG ${u.atk}</span><span>VER ${u.def}</span><span>GES ${u.spd}</span><span>HP ${Math.max(0,u.hp)}/${u.maxHp}</span>
+      </div>
+      <div class="hpbar-outer"><div class="hpbar-inner" style="width:${hpPct}%"></div></div>
+      ${opts.showXp!==false ? `<div class="xpbar-outer"><div class="xpbar-inner" style="width:${xpPct}%"></div></div>` : ''}
     </div>
-    <div class="rank">${u.rank} · Lvl ${u.level} · ${WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
-    <div class="statline">
-      <span>ANG ${u.atk}</span><span>VER ${u.def}</span><span>GES ${u.spd}</span><span>HP ${Math.max(0,u.hp)}/${u.maxHp}</span>
-    </div>
-    <div class="hpbar-outer"><div class="hpbar-inner" style="width:${hpPct}%"></div></div>
-    ${opts.showXp!==false ? `<div class="xpbar-outer"><div class="xpbar-inner" style="width:${xpPct}%"></div></div>` : ''}
   </div>`;
 }
 
@@ -1166,9 +1169,14 @@ function renderAnnouncementModal(){
   const m = modalQueue[0];
   const label = m.action==='restart' ? 'Neu beginnen' : 'Weiter';
   const title = m.action==='restart' ? 'Erfolg!' : 'Neuigkeiten';
-  return `<div class="overlay"><div class="modal">
+  const portraitHtml = m.unit ? `<div class="modal-portrait" title="Porträt-Pfad: ${portraitPath(m.unit)}">
+      <img class="modal-portrait-img" src="${portraitPath(m.unit)}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <div class="modal-portrait-fallback">${initials(m.unit.name)}</div>
+    </div>` : '';
+  return `<div class="overlay"><div class="modal" style="text-align:center;">
+    ${portraitHtml}
     <h2>${title}</h2>
-    <p style="color:var(--text-dim);line-height:1.5;">${m.text}</p>
+    <p style="color:var(--text-dim);line-height:1.5;text-align:left;">${m.text}</p>
     <div class="buttons"><button class="primary" data-action="modal-continue">${label}</button></div>
   </div></div>`;
 }
