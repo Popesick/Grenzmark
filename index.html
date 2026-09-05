@@ -277,6 +277,7 @@ function toggleSprites(){ useSprites = !useSprites; render(); }
 let showTutorial = true; // Ein-/Ausblenden der Tutorial-/Hilfe-Boxen im Kampf
 function toggleTutorial(){ showTutorial = !showTutorial; render(); }
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
+const GAME_VERSION = '0.2.1'; // Startparty-Zusammensetzung, Kaufsöldner, feste Dorf-/Lager-Level, Versionszähler
 
 /* ===================== Musik & Soundeffekte ===================== */
 // Sucht im Ordner "audio" (relativ zur HTML-Datei) nach den Musik- und Effekt-Dateien.
@@ -436,8 +437,8 @@ function bpForSpeed(spd){ return 8 + Math.floor(spd/10); }
 function baseEquipFields(){
   return { weaponTier:'stahl', armorTier:'wolle', equipBonusApplied:{atk:0,def:0,spd:0}, healPotions:1, manaPotions:0 };
 }
-function makeMerc(id, usedNames){
-  const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
+function makeMerc(id, usedNames, forcedWeapon){
+  const weapon = forcedWeapon || ['SCHWERT','AXT','SPEER'][randInt(0,2)];
   const maxHp = randInt(15,25);
   const n = randomName(usedNames);
   return {
@@ -448,6 +449,11 @@ function makeMerc(id, usedNames){
     x:0,y:0, alive:true, hasMoved:false, hasActed:false,
     ...baseEquipFields()
   };
+}
+function shuffleArray(arr){
+  const a=[...arr];
+  for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+  return a;
 }
 function findGenderForName(name){
   const entry = MERC_NAMES.find(e=>e.name===name);
@@ -497,7 +503,9 @@ function initGame(){
   usedNames.add(excludedCandidate);
   const mercs = [makeMageMerc('m0', mageCandidate)];
   usedNames.add(mageCandidate);
-  for(let i=1;i<5;i++) mercs.push(makeMerc('m'+i, usedNames));
+  // Startparty (neben dem Magier): mind. 2 Schwert- und 1 Axtkämpfer, damit max. 1 Speerkämpfer.
+  const weaponSlots = shuffleArray(['SCHWERT','SCHWERT','AXT', ['SCHWERT','AXT','SPEER'][randInt(0,2)]]);
+  for(let i=1;i<5;i++) mercs.push(makeMerc('m'+i, usedNames, weaponSlots[i-1]));
 
   const villages = [0,1,2].map(i=>({id:'dorf'+i, idx:i, name:'Dorf '+(i+1), liberated:false, liberatedAtDay:null}));
   const camps = [0,1,2].map(i=>({id:'lager'+i, idx:i, name:'Banditenlager '+(i+1), visible:false, cleared:false}));
@@ -516,7 +524,7 @@ function initGame(){
     },
     firstAlly:{ unit: makeFirstAllyUnit(), joined:false, active:false, permanent:false },
     secondAlly:{ unit: makeSecondAllyUnit(), joined:false },
-    world:{ villages, camps, castles, activeCastle:0 },
+    world:{ villages, camps, castles, activeCastle:0, villageWinCount:0 },
     offensive:{
       unlocked:false, completed:false,
       camps:[
@@ -610,6 +618,27 @@ function getAveragePartyLevel(){
   const roster = getActivePlayerRoster();
   if(!roster.length) return 1;
   return roster.reduce((a,u)=>a+effectiveLevel(u),0)/roster.length;
+}
+function getWeakestPartyUnit(){
+  const roster = getActivePlayerRoster();
+  if(!roster.length) return null;
+  return roster.reduce((min,u)=> effectiveLevel(u)<effectiveLevel(min) ? u : min, roster[0]);
+}
+function mercenaryPrice(){
+  const weakest = getWeakestPartyUnit();
+  return (weakest && weakest.promoted) ? 3000 : 2000;
+}
+function hireMercenary(){
+  const weakest = getWeakestPartyUnit();
+  if(!weakest) return;
+  const price = mercenaryPrice();
+  if(game.gold<price) return;
+  game.gold -= price;
+  const usedNames = new Set(game.mercs.map(m=>m.name));
+  usedNames.add(game.excludedMageName);
+  const merc = createLeveledMerc(Math.max(1,weakest.level), usedNames);
+  game.mercs.push(merc);
+  logMsg(`${merc.name} (Level ${merc.level}) wird für ${price} Gold als Söldner angeworben.`);
 }
 function createLeveledMerc(level, usedNames){
   const n = randomName(usedNames);
@@ -733,10 +762,17 @@ function enemyPlural(loc){
   return 'Gegner';
 }
 function getEnemyGroups(loc){
-  if(loc.kind==='village') return [{count:5, level:1, weapons:['AXT']}];
+  if(loc.kind==='village'){
+    // Schwierigkeit richtet sich nach der Reihenfolge, in der der Spieler Dörfer befreit (nicht nach Dorf-Index).
+    const tier = Math.min(game.world.villageWinCount+1, 3);
+    if(tier===1) return [{count:5, level:1, weapons:['AXT']}];
+    if(tier===2) return [{count:5, level:2, weapons:['AXT']}];
+    return [{count:2, level:2, weapons:['AXT']}, {count:3, level:3, weapons:['AXT']}];
+  }
   if(loc.kind==='camp'){
-    const n=[8,10,12][loc.ref.idx];
-    const groups=[{count:n, level:1, weapons:['AXT']}];
+    // Feste Level je Stützpunkt (nach Index, nicht nach Reihenfolge des Spielers).
+    const campLevels = [ [[4,3],[4,4]], [[10,4]], [[6,4],[6,5]] ];
+    const groups = campLevels[loc.ref.idx].map(([count,level])=>({count, level, weapons:['AXT']}));
     if(loc.ref.idx===2){
       groups.push({count:1, level:Math.max(1,getStrongestPartyLevel()), weapons:['AXT'], isLeader:true});
     }
@@ -1399,6 +1435,7 @@ function endBattle(outcome){
     if(win){
       loc.ref.liberated=true;
       loc.ref.liberatedAtDay = game.day;
+      game.world.villageWinCount++;
       game.world.camps[loc.ref.idx].visible=true;
       logMsg(`${loc.ref.name} wurde befreit. Ein verborgener Banditenstützpunkt wird sichtbar.`);
       grantFirstAllyIfNeeded();
@@ -1557,7 +1594,7 @@ function renderHeader(){
   return `<div id="header">
     <div>
       <h1>Chronik der Grenzmark</h1>
-      <div class="sub">Taktischer Prototyp</div>
+      <div class="sub">Taktischer Prototyp · V${GAME_VERSION}</div>
     </div>
     <div class="right">
       <span class="day-badge">Tag ${game.day}</span>
@@ -1731,6 +1768,13 @@ function renderWorldScreen(){
 
 function renderShopScreen(){
   let html = '<div class="map-region"><h2>Shop <span class="hint">💰 '+game.gold+' Gold</span></h2></div>';
+
+  const price = mercenaryPrice();
+  const weakest = getWeakestPartyUnit();
+  html += `<div class="panel-box"><h3>Söldner anwerben</h3><div class="action-row">
+    <button data-action="hire-mercenary" ${game.gold<price?'disabled':''}>Söldner anwerben (${price} Gold)</button>
+  </div><div class="help-text">Der Level des Kaufsöldners entspricht dem schwächsten Charakter der Party${weakest?' (aktuell Level '+weakest.level+(weakest.promoted?', befördert':'')+')':''}. Ab Level 20 (nach Beförderung) steigt der Preis auf 3000 Gold.</div></div>`;
+
   html += `<div class="panel-box"><h3>Tränke</h3><div class="action-row">
     <button data-action="buy-potion" data-potion="healPotions" ${game.gold<POTION_PRICE?'disabled':''}>Heiltrank +5 HP kaufen (${POTION_PRICE} Gold)</button>
     <button data-action="buy-potion" data-potion="manaPotions" ${game.gold<POTION_PRICE?'disabled':''}>Manatrank +5 MP kaufen (${POTION_PRICE} Gold)</button>
@@ -2063,6 +2107,7 @@ function attachHandlers(){
       else if(action==='open-camp'){ screen='camp'; render(); }
       else if(action==='back-to-world'){ screen='world'; render(); }
       else if(action==='buy-potion'){ buyPotion(el.getAttribute('data-potion')); render(); }
+      else if(action==='hire-mercenary'){ hireMercenary(); render(); }
       else if(action==='buy-weapon'){ buyWeaponTier(el.getAttribute('data-weapon'), el.getAttribute('data-tier')); render(); }
       else if(action==='buy-armor'){ buyArmorTier(el.getAttribute('data-tier')); render(); }
       else if(action==='equip-weapon'){ const u=findUnitById(el.getAttribute('data-id')); if(u) setWeaponTier(u, el.getAttribute('data-tier')); render(); }
