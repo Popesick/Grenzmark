@@ -119,11 +119,14 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 /* battle */
 #battle-wrap{display:flex;gap:18px;align-items:flex-start;}
 #battle-canvas-holder{background:var(--bg-alt);border:1px solid var(--line);border-radius:4px;padding:8px;position:relative;flex:0 0 auto;}
-.zoom-controls{display:flex;flex-direction:column;gap:14px;justify-content:center;align-items:center;flex:0 0 auto;padding:0 6px;align-self:center;}
+.battle-canvas-column{display:flex;flex-direction:column;align-items:center;gap:12px;flex:0 0 auto;}
+.zoom-controls{display:flex;flex-direction:row;gap:12px;justify-content:center;align-items:center;flex:0 0 auto;}
 .zoom-btn{position:relative;width:38px;height:38px;border-radius:50%;border:2px solid var(--gold-dim);background:var(--panel-alt);color:var(--gold);font-size:18px;font-weight:700;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;}
 .zoom-btn:hover:not(:disabled){border-color:var(--gold);background:var(--line-soft);}
 .zoom-btn:disabled{opacity:.35;cursor:default;}
 .zoom-btn::after{content:'';position:absolute;width:14px;height:3px;background:var(--gold-dim);border-radius:2px;bottom:-7px;right:-7px;transform:rotate(45deg);}
+.display-toggle-btn{border-radius:16px;border:1px solid var(--line);background:var(--panel-alt);color:var(--text);font-size:12px;padding:8px 14px;cursor:pointer;}
+.display-toggle-btn:hover{border-color:var(--gold-dim);background:var(--line-soft);}
 canvas{display:block;border-radius:2px;}
 #battle-side{width:300px;flex:0 0 300px;}
 .panel-box{background:var(--panel-alt);border:1px solid var(--line-soft);border-radius:4px;padding:12px;margin-bottom:12px;}
@@ -201,6 +204,10 @@ const BASE_TILE = 32;
 let zoomTile = BASE_TILE; // per +/- Lupe im Kampfbildschirm veränderbar
 function zoomIn(){ zoomTile = Math.min(56, zoomTile+4); render(); }
 function zoomOut(){ zoomTile = Math.max(16, zoomTile-4); render(); }
+let useSprites = true; // Grafik- vs. Icon-Darstellung auf der Kampfkarte
+function toggleSprites(){ useSprites = !useSprites; render(); }
+let showTutorial = true; // Ein-/Ausblenden der Tutorial-/Hilfe-Boxen im Kampf
+function toggleTutorial(){ showTutorial = !showTutorial; render(); }
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
 
 /* ===================== Musik & Soundeffekte ===================== */
@@ -441,6 +448,7 @@ function initGame(){
   modalQueue.length = 0;
   logMsg('Fünf Söldner brechen von der Hauptstadt auf. Zwei Aufträge liegen an: die Dörfer im Westen schützen und die Nordgrenze halten.');
   screen='world'; pendingLocation=null; battle=null;
+  queueModal('Die Grenzmark wird von fremden Mächten bedroht. Der König hat deine Söldnertruppe damit beauftragt, die Grenzburganlagen zu beschützen. Währenddessen nutzen Banditen im Westen das enstandene Machtvakuum, um Bauerndörfer zu plündern. Die Bauern sind arm, aber vielleicht warten dort neue Verbündete auf dich. Triff deine Entscheidung, aber warte nicht zu lange. Der Feind schläft nicht.');
 }
 
 function logMsg(text){
@@ -1534,13 +1542,16 @@ function renderBattleScreen(){
   const phaseLabel = battle.deploying ? 'Aufstellungsphase' : (battle.phase==='player' ? 'Spielerphase — Runde '+battle.turnNumber : 'Gegnerphase');
   let html = `<div class="phase-banner">${phaseLabel}</div>`;
   html += '<div id="battle-wrap">';
+  html += '<div class="battle-canvas-column">';
   html += `<div id="battle-canvas-holder" style="width:${canvasPx+16}px;height:${canvasPx+16}px;">
     <canvas id="battleCanvas" width="${canvasPx}" height="${canvasPx}"></canvas>
   </div>`;
   html += `<div class="zoom-controls">
-    <button class="zoom-btn" data-action="zoom-in" title="Kampfkarte vergrößern" ${zoomTile>=56?'disabled':''}>+</button>
     <button class="zoom-btn" data-action="zoom-out" title="Kampfkarte verkleinern" ${zoomTile<=16?'disabled':''}>−</button>
+    <button class="zoom-btn" data-action="zoom-in" title="Kampfkarte vergrößern" ${zoomTile>=56?'disabled':''}>+</button>
+    <button class="display-toggle-btn" data-action="toggle-sprites" title="Zwischen Grafik und Icon-Darstellung wechseln">${useSprites ? '🖼 Grafik' : '⚪ Icons'}</button>
   </div>`;
+  html += '</div>'; // battle-canvas-column
   html += '<div id="battle-side">';
 
   if(battle.deploying){
@@ -1593,18 +1604,23 @@ function renderBattleScreen(){
   game.log.slice(0,10).forEach(l=> html += `<div class="entry">${l}</div>`);
   html += `</div></div>`;
 
-  // 5) Tutorial-/Hilfe-Boxen
-  const presentTypes = new Set();
-  for(let y=0;y<battle.size;y++) for(let x=0;x<battle.size;x++) presentTypes.add(battle.grid[y][x]);
-  html += `<div class="panel-box"><h3>Gelände</h3><div class="legend">`;
-  Object.entries(TERRAIN).forEach(([k,t])=>{
-    if(!presentTypes.has(k)) return;
-    html += `<span><i style="background:${t.color}"></i>${t.name} (${t.cost} BP, +${t.def} Vert.${t.heal?', +'+t.heal+' Heilung/Runde':''})</span>`;
-  });
-  html += `</div></div>`;
+  // 5) Tutorial-/Hilfe-Boxen (ein-/ausblendbar)
+  html += `<div class="panel-box"><div class="action-row">
+    <button data-action="toggle-tutorial">${showTutorial ? 'Tutorial ausblenden' : 'Tutorial einblenden'}</button>
+  </div></div>`;
+  if(showTutorial){
+    const presentTypes = new Set();
+    for(let y=0;y<battle.size;y++) for(let x=0;x<battle.size;x++) presentTypes.add(battle.grid[y][x]);
+    html += `<div class="panel-box"><h3>Gelände</h3><div class="legend">`;
+    Object.entries(TERRAIN).forEach(([k,t])=>{
+      if(!presentTypes.has(k)) return;
+      html += `<span><i style="background:${t.color}"></i>${t.name} (${t.cost} BP, +${t.def} Vert.${t.heal?', +'+t.heal+' Heilung/Runde':''})</span>`;
+    });
+    html += `</div></div>`;
 
-  html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen. Ein Klick auf eine feindliche Einheit (wenn gerade keine eigene aktiv ist) zeigt deren Bewegungsradius in Rot sowie ihre Werte.${battle.specialTiles && battle.specialTiles.length ? ' Gegner versuchen zu Beginn, Wachtürme/Burg zu besetzen und zu halten — wer zuerst dort ist, sichert sich den Verteidigungsbonus.' : ''}</div></div>`;
-  html += `<div class="panel-box"><h3>Umzingelung</h3><div class="help-text" style="margin-bottom:0;">Steht neben dem Angreifer noch mind. ein weiterer Verbündeter direkt am Ziel an, steigen Trefferchance (+${FLANK_BONUS.hit} pro zusätzlichem Angreifer) und Schaden (+${FLANK_BONUS.dmg}). Gilt für beide Seiten.</div></div>`;
+    html += `<div class="panel-box"><h3>Steuerung</h3><div class="help-text" style="margin-bottom:0;">Einheit anklicken, dann entweder ein blaues Feld zum Bewegen wählen oder direkt auf einen angrenzenden Gegner klicken, um ohne Bewegung anzugreifen. Ein Klick auf eine feindliche Einheit (wenn gerade keine eigene aktiv ist) zeigt deren Bewegungsradius in Rot sowie ihre Werte.${battle.specialTiles && battle.specialTiles.length ? ' Gegner versuchen zu Beginn, Wachtürme/Burg zu besetzen und zu halten — wer zuerst dort ist, sichert sich den Verteidigungsbonus.' : ''}</div></div>`;
+    html += `<div class="panel-box"><h3>Umzingelung</h3><div class="help-text" style="margin-bottom:0;">Steht neben dem Angreifer noch mind. ein weiterer Verbündeter direkt am Ziel an, steigen Trefferchance (+${FLANK_BONUS.hit} pro zusätzlichem Angreifer) und Schaden (+${FLANK_BONUS.dmg}). Gilt für beide Seiten.</div></div>`;
+  }
 
   html += '</div></div>'; // battle-side, battle-wrap
 
@@ -1678,7 +1694,7 @@ function drawBattleCanvas(){
   battle.units.filter(u=>u.alive).forEach(u=>{
     const cx = u.x*T+T/2, cy=u.y*T+T/2;
     const sprite = getSprite(spritePath(u));
-    const useSprite = sprite.loaded && !sprite.failed;
+    const useSprite = useSprites && sprite.loaded && !sprite.failed;
     if(battle.selected===u || battle.deploySelected===u || battle.inspecting===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,14*s,0,Math.PI*2); ctx.stroke(); }
     if(useSprite){
       ctx.drawImage(sprite.img, u.x*T, u.y*T, T, T);
@@ -1737,6 +1753,8 @@ function attachHandlers(){
       else if(action==='toggle-sfx'){ toggleSfx(); render(); }
       else if(action==='zoom-in'){ zoomIn(); }
       else if(action==='zoom-out'){ zoomOut(); }
+      else if(action==='toggle-sprites'){ toggleSprites(); }
+      else if(action==='toggle-tutorial'){ toggleTutorial(); }
       else if(action==='select-loc'){
         const kind = el.getAttribute('data-kind');
         const idx = Number(el.getAttribute('data-idx'));
