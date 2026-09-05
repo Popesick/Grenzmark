@@ -200,6 +200,74 @@ function getSprite(path){
 }
 const WEAPON_TRIANGLE_BONUS = { hit:12, dmg:2 }; // konfigurierbar (Spec: 10-15 / 1-2)
 const FLANK_BONUS = { hit:10, dmg:2 }; // pro zusätzlichem angrenzenden Verbündeten am Ziel (konfigurierbar, Erweiterung über die Spec hinaus)
+
+/* ===================== Ausrüstung / Ökonomie ===================== */
+const WEAPON_TIER_BONUS = {
+  stahl:     { atk:0,  def:0,  spd:0 },
+  silber:    { atk:5,  def:3,  spd:2 },
+  elementar: { atk:10, def:5,  spd:5 }
+};
+const ARMOR_TIER_BONUS = {
+  wolle:     { atk:0, def:0,  spd:0 },
+  leder:     { atk:0, def:5,  spd:0 },
+  eisen:     { atk:0, def:15, spd:-5 },
+  silber:    { atk:0, def:25, spd:0 },
+  elementar: { atk:5, def:50, spd:5 }
+};
+const WEAPON_TIER_PRICE = { silber:2000, elementar:5000 };
+const ARMOR_TIER_PRICE = { leder:500, eisen:2000, silber:5000, elementar:10000 };
+const POTION_PRICE = 25;
+function computeEquipBonus(u){
+  const w = WEAPON_TIER_BONUS[u.weaponTier||'stahl'];
+  const a = ARMOR_TIER_BONUS[u.armorTier||'wolle'];
+  return { atk:w.atk+a.atk, def:w.def+a.def, spd:w.spd+a.spd };
+}
+function reapplyEquipBonus(u){
+  const old = u.equipBonusApplied || {atk:0,def:0,spd:0};
+  u.atk -= old.atk; u.def -= old.def; u.spd -= old.spd;
+  const now = computeEquipBonus(u);
+  u.atk += now.atk; u.def += now.def; u.spd += now.spd;
+  u.equipBonusApplied = now;
+}
+function setWeaponTier(u, tier){
+  if(tier!=='stahl' && !game.shop.weaponTiers[u.weapon][tier]) return;
+  u.weaponTier = tier;
+  reapplyEquipBonus(u);
+}
+function setArmorTier(u, tier){
+  if(tier!=='wolle' && !game.shop.armorTiers[tier]) return;
+  u.armorTier = tier;
+  reapplyEquipBonus(u);
+}
+function buyWeaponTier(weaponType, tier){
+  const price = WEAPON_TIER_PRICE[tier];
+  if(game.shop.weaponTiers[weaponType][tier] || game.gold<price) return;
+  game.gold -= price;
+  game.shop.weaponTiers[weaponType][tier] = true;
+  logMsg(`${tier==='silber'?'Silber':'Elementar'}-${WEAPON_NAME[weaponType]} für die Truppe erworben.`);
+}
+function buyArmorTier(tier){
+  const price = ARMOR_TIER_PRICE[tier];
+  if(game.shop.armorTiers[tier] || game.gold<price) return;
+  game.gold -= price;
+  game.shop.armorTiers[tier] = true;
+  logMsg(`${ARMOR_TIER_NAME[tier]} für die Truppe erworben.`);
+}
+function buyPotion(kind){
+  if(game.gold<POTION_PRICE) return;
+  game.gold -= POTION_PRICE;
+  game.pool[kind]++;
+}
+function movePotionToUnit(u, kind){
+  if(game.pool[kind]<=0) return;
+  game.pool[kind]--; u[kind]++;
+}
+function movePotionToPool(u, kind){
+  if(u[kind]<=0) return;
+  u[kind]--; game.pool[kind]++;
+}
+const ARMOR_TIER_NAME = { wolle:'Wollrüstung', leder:'Lederrüstung', eisen:'Eisenrüstung', silber:'Silberrüstung', elementar:'Elementarrüstung' };
+const WEAPON_TIER_NAME = { stahl:'Stahl', silber:'Silber', elementar:'Elementar' };
 const BASE_TILE = 32;
 let zoomTile = BASE_TILE; // per +/- Lupe im Kampfbildschirm veränderbar
 function zoomIn(){ zoomTile = Math.min(56, zoomTile+4); render(); }
@@ -365,6 +433,9 @@ function randomName(usedSet){
 /* ===================== Einheiten-Erzeugung ===================== */
 function bpForSpeed(spd){ return 8 + Math.floor(spd/10); }
 
+function baseEquipFields(){
+  return { weaponTier:'stahl', armorTier:'wolle', equipBonusApplied:{atk:0,def:0,spd:0}, healPotions:1, manaPotions:0 };
+}
 function makeMerc(id, usedNames){
   const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
   const maxHp = randInt(15,25);
@@ -374,7 +445,8 @@ function makeMerc(id, usedNames){
     weapon, level:1, rank:'Söldner',
     atk: randInt(1,10), def: randInt(1,10), spd: randInt(1,10), mag:0, maxMag:0,
     maxHp, hp:maxHp, xp:0,
-    x:0,y:0, alive:true, hasMoved:false, hasActed:false
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false,
+    ...baseEquipFields()
   };
 }
 function findGenderForName(name){
@@ -390,7 +462,8 @@ function makeMageMerc(id, name){
     weapon, level:1, rank:'Magier',
     atk: randInt(1,10), def: randInt(1,10), spd: randInt(1,10), mag:maxMag, maxMag,
     maxHp, hp:maxHp, xp:0,
-    x:0,y:0, alive:true, hasMoved:false, hasActed:false
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false,
+    ...baseEquipFields()
   };
 }
 
@@ -398,13 +471,15 @@ function makeFirstAllyUnit(){
   return { id:'ally1', name:'Roderick', gender:'m', team:'player', isAlly:true, isMage:false,
     weapon:'AXT', level:1, rank:'Verbündeter',
     atk:10, def:10, spd:10, mag:0, maxMag:0, maxHp:25, hp:25, xp:0,
-    x:0,y:0, alive:true, hasMoved:false, hasActed:false };
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false,
+    ...baseEquipFields() };
 }
 function makeSecondAllyUnit(){
   return { id:'ally2', name:'Ysolde', gender:'w', team:'player', isAlly:true, isMage:false,
     weapon:'SPEER', level:5, rank:'Verbündete',
     atk:15, def:15, spd:15, mag:0, maxMag:0, maxHp:35, hp:35, xp:0,
-    x:0,y:0, alive:true, hasMoved:false, hasActed:false };
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false,
+    ...baseEquipFields() };
 }
 
 /* ===================== Weltinitialisierung ===================== */
@@ -424,7 +499,7 @@ function initGame(){
   usedNames.add(mageCandidate);
   for(let i=1;i<5;i++) mercs.push(makeMerc('m'+i, usedNames));
 
-  const villages = [0,1,2].map(i=>({id:'dorf'+i, idx:i, name:'Dorf '+(i+1), liberated:false}));
+  const villages = [0,1,2].map(i=>({id:'dorf'+i, idx:i, name:'Dorf '+(i+1), liberated:false, liberatedAtDay:null}));
   const camps = [0,1,2].map(i=>({id:'lager'+i, idx:i, name:'Banditenlager '+(i+1), visible:false, cleared:false}));
   const castles = [0,1,2,3,4].map(i=>({id:'burg'+i, idx:i, name:'Burg '+(i+1), siege:0, fallen:false}));
 
@@ -432,6 +507,13 @@ function initGame(){
     day:1,
     mercs,
     excludedMageName: excludedCandidate,
+    gold: 0,
+    villageIncomeAnnounced:false, castleIncomeAnnounced:false,
+    pool: { healPotions:0, manaPotions:0 },
+    shop: {
+      weaponTiers: { SCHWERT:{silber:false,elementar:false}, AXT:{silber:false,elementar:false}, SPEER:{silber:false,elementar:false} },
+      armorTiers: { leder:false, eisen:false, silber:false, elementar:false }
+    },
     firstAlly:{ unit: makeFirstAllyUnit(), joined:false, active:false, permanent:false },
     secondAlly:{ unit: makeSecondAllyUnit(), joined:false },
     world:{ villages, camps, castles, activeCastle:0 },
@@ -441,6 +523,13 @@ function initGame(){
         {id:'sup0', idx:0, name:'Versorgungslager 1', count:10, level:10, mixed:true,  cleared:false},
         {id:'sup1', idx:1, name:'Versorgungslager 2', count:15, level:10, mixed:false, cleared:false},
         {id:'sup2', idx:2, name:'Versorgungslager 3', count:15, level:15, mixed:false, cleared:false}
+      ]
+    },
+    rumor:{
+      unlocked:false, actionsSince:0, completed:false,
+      camps:[
+        {id:'rumor0', idx:0, name:'Verdächtige Lichtung', cleared:false},
+        {id:'rumor1', idx:1, name:'Verborgenes Lager', cleared:false}
       ]
     },
     log:[]
@@ -499,7 +588,7 @@ function grantSecondAlly(){
   if(!a.joined){
     a.joined=true;
     logMsg(`${a.unit.name} schließt sich der Truppe an.`);
-    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`, null, 'dismiss', a.unit);
+    queueModal(`Nachdem sich der Staub des Kampfes gelegt hat, tritt eine Frau aus dem Schatten. Ysolde ist eine Banditenkriegerin und will sich euerer Gemeinschaft anschließen.`, null, 'dismiss', a.unit);
   }
 }
 function getActivePlayerRoster(){
@@ -508,10 +597,19 @@ function getActivePlayerRoster(){
   if(game.secondAlly.joined) list.push(game.secondAlly.unit);
   return list;
 }
+function findUnitById(id){
+  return getActivePlayerRoster().find(u=>u.id===id);
+}
+function effectiveLevel(u){ return u.promoted ? u.level+20 : u.level; }
 function getStrongestPartyLevel(){
   const roster = getActivePlayerRoster();
   if(!roster.length) return 1;
-  return Math.max(...roster.map(u=>u.level));
+  return Math.max(...roster.map(effectiveLevel));
+}
+function getAveragePartyLevel(){
+  const roster = getActivePlayerRoster();
+  if(!roster.length) return 1;
+  return roster.reduce((a,u)=>a+effectiveLevel(u),0)/roster.length;
 }
 function createLeveledMerc(level, usedNames){
   const n = randomName(usedNames);
@@ -523,7 +621,8 @@ function createLeveledMerc(level, usedNames){
     weapon, level, rank:'Söldner',
     atk:randInt(1,10)+bonus, def:randInt(1,10)+bonus, spd:randInt(1,10)+bonus, mag:0, maxMag:0,
     maxHp, hp:maxHp, xp:0,
-    x:0,y:0, alive:true, hasMoved:false, hasActed:false
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false,
+    ...baseEquipFields()
   };
 }
 function checkCastlesCompleted(){
@@ -540,6 +639,9 @@ function checkCastlesCompleted(){
       `Der König lobt euren Erfolg an der Nordgrenze. Er trägt euch auf, den Gegenschlag zu unterstützen und in feindliches Gebiet vorzudringen. ${merc.name} (Level 10) schließt sich als Verstärkung eurer Truppe an.`,
       ()=>{ game.offensive.unlocked=true; }, 'dismiss', merc
     );
+    game.rumor.unlocked = true;
+    game.rumor.actionsSince = 0;
+    queueModal('Gerüchte wabern umher, dass eine geheimnisvolle Macht die Angreifer aus ihren Landen vertrieben hat. Gehe den Gerüchten nach.');
   }
 }
 function checkOffensiveCompleted(){
@@ -547,6 +649,13 @@ function checkOffensiveCompleted(){
   if(game.offensive.camps.every(c=>c.cleared)){
     game.offensive.completed=true;
     queueModal('Missionen abgeschlossen! Die Grenzmark ist gesichert und der Gegenschlag erfolgreich.', null, 'restart');
+  }
+}
+function checkRumorCompleted(){
+  if(!game.rumor || game.rumor.completed) return;
+  if(game.rumor.camps.every(c=>c.cleared)){
+    game.rumor.completed=true;
+    queueModal('Die geheimnisvolle Macht ist ergründet. Auch dieser Gerüchtefaden ist zu Ende erzählt.');
   }
 }
 
@@ -593,14 +702,11 @@ function advanceCastleSiege(amount){
   const idx = game.world.activeCastle;
   if(idx>=game.world.castles.length) return;
   const castle = game.world.castles[idx];
+  if(castle.fallen) return; // Durchbruch bereits erfolgt, wartet auf Rückeroberung — Front rückt nicht weiter vor
   castle.siege = Math.min(100, castle.siege+amount);
   if(castle.siege>=100){
     castle.fallen=true;
-    logMsg(`${castle.name} ist gefallen! Umliegendes Land gerät unter feindliche Kontrolle.`);
-    game.world.activeCastle = idx+1;
-    if(game.world.activeCastle>=game.world.castles.length){
-      logMsg('Alle Burgen entlang der Nordgrenze sind gefallen.');
-    }
+    logMsg(`${castle.name} ist gefallen! Die Belagerung wurde durchbrochen.`);
   }
 }
 function siegeLabel(v){
@@ -616,17 +722,26 @@ function enemySingular(loc){
   if(loc.kind==='village' || loc.kind==='camp') return 'Bandit';
   if(loc.kind==='castle') return loc.ref.fallen ? 'Verteidiger' : 'Belagerer';
   if(loc.kind==='supply') return 'Soldat';
+  if(loc.kind==='rumor') return 'Schattenkrieger';
   return 'Gegner';
 }
 function enemyPlural(loc){
   if(loc.kind==='village' || loc.kind==='camp') return 'Banditen';
   if(loc.kind==='castle') return loc.ref.fallen ? 'Verteidiger' : 'Belagerer';
   if(loc.kind==='supply') return 'Soldaten';
+  if(loc.kind==='rumor') return 'Schattenkrieger';
   return 'Gegner';
 }
 function getEnemyGroups(loc){
   if(loc.kind==='village') return [{count:5, level:1, weapons:['AXT']}];
-  if(loc.kind==='camp'){ const n=[8,10,12][loc.ref.idx]; return [{count:n, level:1, weapons:['AXT']}]; }
+  if(loc.kind==='camp'){
+    const n=[8,10,12][loc.ref.idx];
+    const groups=[{count:n, level:1, weapons:['AXT']}];
+    if(loc.ref.idx===2){
+      groups.push({count:1, level:Math.max(1,getStrongestPartyLevel()), weapons:['AXT'], isLeader:true});
+    }
+    return groups;
+  }
   if(loc.kind==='castle'){
     if(loc.ref.fallen){
       return [
@@ -637,7 +752,17 @@ function getEnemyGroups(loc){
     return [{count:10, level:5, weapons:['SCHWERT','SPEER']}];
   }
   if(loc.kind==='supply'){
-    return [{count:loc.ref.count, level:loc.ref.level, weapons: loc.ref.mixed ? ['SCHWERT','AXT','SPEER'] : ['SCHWERT']}];
+    return [{count:3, level:Math.max(1,getStrongestPartyLevel()-2), weapons:['SCHWERT','AXT','SPEER']}];
+  }
+  if(loc.kind==='rumor'){
+    const avg = getAveragePartyLevel();
+    if(loc.ref.idx===0){
+      const immediate = game.rumor.actionsSince===0;
+      const lvl = Math.max(1, Math.round(avg - (immediate?3:2)));
+      return [{count:15, level:lvl, weapons:['SCHWERT','AXT','SPEER']}];
+    }
+    const lvl2 = Math.max(1, Math.round(avg-1));
+    return [{count:15, level:lvl2, weapons:['SCHWERT','AXT','SPEER']}];
   }
   return [];
 }
@@ -758,8 +883,8 @@ function generateBattle(loc){
       const bonus = g.level-1;
       const maxHp = Math.floor(rng()*11)+15+bonus*3;
       enemies.push({
-        id:'e'+counter, name: enemySingular(loc)+' '+(counter+1),
-        team:'enemy', isAlly:false, isMage:false, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank:'Gegner',
+        id:'e'+counter, name: g.isLeader ? 'Bandenanführer' : (enemySingular(loc)+' '+(counter+1)),
+        team:'enemy', isAlly:false, isMage:false, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank: g.isLeader ? 'Anführer' : 'Gegner',
         atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0, maxMag:0,
         maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
       });
@@ -842,7 +967,10 @@ function pushDamagePopup(x,y,text,color){
 function attackOnce(attacker, defender, isCounter){
   if(battle) battle.lastAttackerId = attacker.id;
   const terrainDef = TERRAIN[battle.grid[defender.y][defender.x]].def;
-  const tri = triangleMod(attacker.weapon, defender.weapon);
+  // Magier gelten im Nahkampf immer als unterlegene Waffe, unabhängig vom getragenen Waffentyp.
+  const tri = attacker.isMage
+    ? { hit:-WEAPON_TRIANGLE_BONUS.hit, dmg:-WEAPON_TRIANGLE_BONUS.dmg }
+    : triangleMod(attacker.weapon, defender.weapon);
   const flank = countFlankers(attacker, defender);
   let hitChance = 70 + (attacker.spd - defender.spd) + tri.hit + flank*FLANK_BONUS.hit;
   if(isCounter) hitChance -= 20;
@@ -854,7 +982,6 @@ function attackOnce(attacker, defender, isCounter){
     let atkVal = attacker.atk;
     if(isCounter) atkVal = atkVal*0.8;
     let dmg = Math.round(atkVal) + tri.dmg + flank*FLANK_BONUS.dmg - defender.def - (defender.defBuff||0) - terrainDef;
-    if(attacker.isMage) dmg = Math.round(dmg*0.25); // Nahkampfangriffe von Magiern sind stark abgeschwächt
     dmg = Math.max(1, dmg);
     defender.hp -= dmg;
     pushDamagePopup(defender.x, defender.y, '-'+dmg, '#ff6b5e');
@@ -918,12 +1045,14 @@ function castSpell(mage, target, spellKey){
   battle.damagePopups = [];
   if(spellKey==='feuerball'){
     const terrainDef = TERRAIN[battle.grid[target.y][target.x]].def;
-    let hitChance = 70 + (mage.spd - target.spd);
+    // Magie gilt gegen nicht-magische Gegner immer als überlegene Waffe im Sinne des Waffendreiecks.
+    const tri = target.isMage ? {hit:0, dmg:0} : {hit:WEAPON_TRIANGLE_BONUS.hit, dmg:WEAPON_TRIANGLE_BONUS.dmg};
+    let hitChance = 70 + (mage.spd - target.spd) + tri.hit;
     hitChance = Math.max(5, Math.min(95, hitChance));
     playSfx('fireball');
     applyXP(mage, randInt(5,10));
     if(Math.random()*100 < hitChance){
-      let dmg = Math.round(mage.atk) - target.def - (target.defBuff||0) - terrainDef;
+      let dmg = Math.round(mage.atk) + tri.dmg - target.def - (target.defBuff||0) - terrainDef;
       dmg = Math.max(1, dmg);
       target.hp -= dmg;
       pushDamagePopup(target.x, target.y, '-'+dmg, '#ff6b5e');
@@ -995,6 +1124,10 @@ function moveSelectedTo(x,y){
   const u = battle.selected;
   u.x=x; u.y=y; u.hasMoved=true;
   battle.moveRange=null;
+  if(u.team==='player' && battle.grid[y][x]==='DORF' && !battle.villageMessageShown){
+    battle.villageMessageShown = true;
+    queueModal('Die Dorfbewohner sind erfreut über eueren Besuch und unterstützen euch in euerem Kampf. Rastet hier, um Lebenspunkte wieder herzustellen.');
+  }
   const targets = adjacentEnemies(u);
   const canCast = u.isMage && mageHasCastableSpell(u);
   if(targets.length){
@@ -1029,6 +1162,23 @@ function performPlayerAttack(target){
 function waitAction(){
   if(battle.selected) battle.selected.hasActed=true;
   battle.selected=null; battle.attackRange=null; battle.mode='idle';
+  render();
+}
+function usePotionInBattle(kind){
+  const u = battle.selected;
+  if(!u || u.hasActed || u[kind]<=0) return;
+  u[kind]--;
+  if(kind==='healPotions'){
+    const before=u.hp; u.hp=Math.min(u.maxHp,u.hp+5);
+    logMsg(`${u.name} trinkt einen Heiltrank (+${u.hp-before} HP).`);
+    pushDamagePopup(u.x,u.y,'+'+(u.hp-before),'#5f8f61');
+  } else {
+    const before=u.mag; u.mag=Math.min(u.maxMag,u.mag+5);
+    logMsg(`${u.name} trinkt einen Manatrank (+${u.mag-before} MP).`);
+    pushDamagePopup(u.x,u.y,'+'+(u.mag-before),'#a78bc9');
+  }
+  u.hasActed = true;
+  battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
   render();
 }
 function startCastingSpell(spellKey){
@@ -1244,9 +1394,11 @@ function endBattle(outcome){
   battle.units.filter(u=>u.team==='player').forEach(u=>{ u.hp=u.maxHp; u.alive=true; u.defBuff=0; u.defBuffRounds=0; if(u.isMage) u.mag=u.maxMag; });
   const loc = battle.loc;
   const win = outcome==='victory';
+  if(win){ game.gold += 100; logMsg('Für den erfolgreichen Einsatz erhaltet ihr 100 Gold.'); }
   if(loc.kind==='village'){
     if(win){
       loc.ref.liberated=true;
+      loc.ref.liberatedAtDay = game.day;
       game.world.camps[loc.ref.idx].visible=true;
       logMsg(`${loc.ref.name} wurde befreit. Ein verborgener Banditenstützpunkt wird sichtbar.`);
       grantFirstAllyIfNeeded();
@@ -1267,8 +1419,12 @@ function endBattle(outcome){
   } else if(loc.kind==='castle'){
     if(loc.ref.fallen){
       if(win){
-        loc.ref.fallen=false; loc.ref.siege=0;
         logMsg(`${loc.ref.name} wurde zurückerobert!`);
+        // Nach einem Durchbruch macht es keinen Sinn, weitere Burgen einzeln zu befreien:
+        // sobald die Rückeroberung gelingt, gilt die gesamte Nordgrenze als gesichert.
+        game.world.castles.forEach(c=>{ c.fallen=false; c.siege=0; });
+        game.world.activeCastle = game.world.castles.length;
+        logMsg('Die Nordgrenze gilt als gesichert.');
         checkCastlesCompleted();
       } else {
         logMsg(`Der Versuch, ${loc.ref.name} zurückzuerobern, ist gescheitert.`);
@@ -1296,14 +1452,60 @@ function endBattle(outcome){
     } else {
       logMsg(`Der Angriff auf ${loc.ref.name} ist gescheitert.`);
     }
+  } else if(loc.kind==='rumor'){
+    if(win){
+      loc.ref.cleared=true;
+      logMsg(`${loc.ref.name} wurde erkundet.`);
+      checkRumorCompleted();
+    } else {
+      logMsg(`Die Erkundung von ${loc.ref.name} ist gescheitert.`);
+    }
+  }
+  if(game.rumor && game.rumor.unlocked && loc.kind!=='rumor'){
+    game.rumor.actionsSince++;
   }
   // Weltzeit schreitet an der aktiven Frontburg voran, außer man kämpft dort gerade selbst.
   if(!(loc.kind==='castle' && !loc.ref.fallen)){
     advanceCastleSiege(randInt(25,34));
   }
   game.day++;
+  checkVillageRecapture();
+  checkPassiveIncome();
   battle=null; screen='world'; pendingLocation=null;
   render();
+}
+function checkVillageRecapture(){
+  // Werden nicht alle Banditenstützpunkte zerstört, holen sich die Banditen befreite Dörfer
+  // nach 3/4/5 Runden seit der Befreiung zurück. Sind alle Stützpunkte zerstört, tritt das Ereignis nie ein.
+  if(game.world.camps.every(c=>c.cleared)) return;
+  const thresholds = [3,4,5];
+  game.world.villages.forEach((v,idx)=>{
+    if(v.liberated && v.liberatedAtDay!=null && (game.day - v.liberatedAtDay) >= thresholds[idx]){
+      v.liberated = false;
+      v.liberatedAtDay = null;
+      logMsg('Die Banditen haben ihre Kräfte gesammelt und ein Dorf eingenommen.');
+      queueModal('Die Banditen haben ihre Kräfte gesammelt und ein Dorf eingenommen.');
+    }
+  });
+}
+
+function checkPassiveIncome(){
+  const villagesCampsDone = game.world.villages.every(v=>v.liberated) && game.world.camps.every(c=>c.cleared);
+  if(villagesCampsDone){
+    game.gold += 100;
+    if(!game.villageIncomeAnnounced){
+      game.villageIncomeAnnounced = true;
+      queueModal('Die Bauern sind dankbar für euere Hilfe und überweisen euch jeden Monat 100 Gold als Unterstützung.');
+    }
+  }
+  const castlesSecure = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
+  if(castlesSecure){
+    game.gold += 200;
+    if(!game.castleIncomeAnnounced){
+      game.castleIncomeAnnounced = true;
+      queueModal('Der König ist zufrieden mit eueren Leistungen und unterstützt euch ab sofort monatlich mit 200 Gold.');
+    }
+  }
 }
 
 /* ===================== Rendering ===================== */
@@ -1322,9 +1524,11 @@ function render(){
   html += '<div id="content">';
   if(screen==='world') html += renderWorldScreen();
   if(screen==='battle') html += renderBattleScreen();
+  if(screen==='shop') html += renderShopScreen();
+  if(screen==='camp') html += renderCampScreen();
   html += '</div></div>';
   if(screen==='confirm') html += renderConfirmModal();
-  if(screen==='world' && modalQueue.length) html += renderAnnouncementModal();
+  if((screen==='world' || screen==='battle') && modalQueue.length) html += renderAnnouncementModal();
   appEl.innerHTML = html;
   attachHandlers();
   if(screen==='battle') drawBattleCanvas();
@@ -1357,6 +1561,7 @@ function renderHeader(){
     </div>
     <div class="right">
       <span class="day-badge">Tag ${game.day}</span>
+      <span class="day-badge">💰 ${game.gold} Gold</span>
       <button data-action="toggle-music">${musicEnabled ? '🎵 Musik an' : '🎵 Musik aus'}</button>
       <button data-action="toggle-sfx">${sfxEnabled ? '🔊 Sound an' : '🔇 Sound aus'}</button>
       <button data-action="newgame">Neues Spiel</button>
@@ -1447,7 +1652,9 @@ function renderSidebar(){
 
 function renderWorldScreen(){
   const w = game.world;
-  let html = '<div class="map-region"><div class="capital-node"><div class="n-name">Hauptstadt</div><div class="n-state">Sitz der Truppe · ' + getActivePlayerRoster().length + ' Kämpfer bereit</div></div></div>';
+  let html = '<div class="map-region"><div class="capital-node"><div class="n-name">Hauptstadt</div><div class="n-state">Sitz der Truppe · ' + getActivePlayerRoster().length + ' Kämpfer bereit</div>'
+    + '<div class="action-row" style="justify-content:center;margin-top:12px;"><button data-action="open-shop">Shop besuchen</button><button data-action="open-camp">Camp</button></div>'
+    + '</div></div>';
 
   html += '<div class="map-region"><h2>Nordgrenze <span class="hint">Burgen werden nacheinander belagert</span></h2><div class="node-row">';
   w.castles.forEach((c,i)=>{
@@ -1504,6 +1711,82 @@ function renderWorldScreen(){
     });
     html += '</div></div>';
   }
+  if(game.rumor && game.rumor.unlocked){
+    const nextIdx = game.rumor.camps.findIndex(c=>!c.cleared);
+    html += '<div class="map-region"><h2>Gerüchte aus dem Süden <span class="hint">Geheimnisvolle Macht</span></h2><div class="node-row">';
+    game.rumor.camps.forEach((c,i)=>{
+      if(c.cleared){
+        html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Erkundet</div></div>`;
+      } else if(i===nextIdx){
+        html += `<div class="node clickable" data-action="select-loc" data-kind="rumor" data-idx="${i}">
+          <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+      } else {
+        html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht erreichbar</div></div>`;
+      }
+    });
+    html += '</div></div>';
+  }
+  return html;
+}
+
+function renderShopScreen(){
+  let html = '<div class="map-region"><h2>Shop <span class="hint">💰 '+game.gold+' Gold</span></h2></div>';
+  html += `<div class="panel-box"><h3>Tränke</h3><div class="action-row">
+    <button data-action="buy-potion" data-potion="healPotions" ${game.gold<POTION_PRICE?'disabled':''}>Heiltrank +5 HP kaufen (${POTION_PRICE} Gold)</button>
+    <button data-action="buy-potion" data-potion="manaPotions" ${game.gold<POTION_PRICE?'disabled':''}>Manatrank +5 MP kaufen (${POTION_PRICE} Gold)</button>
+  </div><div class="help-text">Im Lager: ${game.pool.healPotions} Heiltränke, ${game.pool.manaPotions} Manatränke. Zuordnung zu Charakteren im Camp.</div></div>`;
+
+  html += `<div class="panel-box"><h3>Waffen</h3>`;
+  ['SCHWERT','AXT','SPEER'].forEach(wt=>{
+    html += `<div class="statline" style="margin:8px 0 4px;">${WEAPON_NAME[wt]}</div><div class="action-row">`;
+    ['silber','elementar'].forEach(tier=>{
+      const owned = game.shop.weaponTiers[wt][tier];
+      const price = WEAPON_TIER_PRICE[tier];
+      html += `<button data-action="buy-weapon" data-weapon="${wt}" data-tier="${tier}" ${owned||game.gold<price?'disabled':''}>${owned?'✓ '+WEAPON_TIER_NAME[tier]+' freigeschaltet':WEAPON_TIER_NAME[tier]+' ('+price+' Gold)'}</button>`;
+    });
+    html += `</div>`;
+  });
+  html += `</div>`;
+
+  html += `<div class="panel-box"><h3>Rüstung</h3><div class="action-row">`;
+  ['leder','eisen','silber','elementar'].forEach(tier=>{
+    const owned = game.shop.armorTiers[tier];
+    const price = ARMOR_TIER_PRICE[tier];
+    html += `<button data-action="buy-armor" data-tier="${tier}" ${owned||game.gold<price?'disabled':''}>${owned?'✓ '+ARMOR_TIER_NAME[tier]+' freigeschaltet':ARMOR_TIER_NAME[tier]+' ('+price+' Gold)'}</button>`;
+  });
+  html += `</div></div>`;
+
+  html += `<div class="panel-box"><div class="action-row"><button class="primary" data-action="back-to-world">Zurück zur Weltkarte</button></div></div>`;
+  return html;
+}
+
+function renderCampScreen(){
+  let html = '<div class="map-region"><h2>Camp <span class="hint">Ausrüstung zuordnen · 💰 '+game.gold+' Gold · Lager: '+game.pool.healPotions+' Heiltränke, '+game.pool.manaPotions+' Manatränke</span></h2></div>';
+  const roster = getActivePlayerRoster();
+  roster.forEach(u=>{
+    html += `<div class="panel-box">${unitCardHtml(u)}`;
+    html += `<div class="statline" style="margin:8px 0 4px;">Waffe (${WEAPON_NAME[u.weapon]})</div><div class="action-row">`;
+    ['stahl','silber','elementar'].forEach(tier=>{
+      const unlocked = tier==='stahl' || game.shop.weaponTiers[u.weapon][tier];
+      const active = u.weaponTier===tier;
+      html += `<button data-action="equip-weapon" data-id="${u.id}" data-tier="${tier}" ${(!unlocked||active)?'disabled':''} ${active?'class="primary"':''}>${WEAPON_TIER_NAME[tier]}${active?' ✓':''}</button>`;
+    });
+    html += `</div>`;
+    html += `<div class="statline" style="margin:8px 0 4px;">Rüstung</div><div class="action-row">`;
+    ['wolle','leder','eisen','silber','elementar'].forEach(tier=>{
+      const unlocked = tier==='wolle' || game.shop.armorTiers[tier];
+      const active = u.armorTier===tier;
+      html += `<button data-action="equip-armor" data-id="${u.id}" data-tier="${tier}" ${(!unlocked||active)?'disabled':''} ${active?'class="primary"':''}>${ARMOR_TIER_NAME[tier]}${active?' ✓':''}</button>`;
+    });
+    html += `</div>`;
+    html += `<div class="statline" style="margin:8px 0 4px;">Tränke</div><div class="action-row">
+      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="healPotions" ${game.pool.healPotions<=0?'disabled':''}>+ Heiltrank (${u.healPotions})</button>
+      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="healPotions" ${u.healPotions<=0?'disabled':''}>− Heiltrank</button>
+      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="manaPotions" ${game.pool.manaPotions<=0?'disabled':''}>+ Manatrank (${u.manaPotions})</button>
+      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="manaPotions" ${u.manaPotions<=0?'disabled':''}>− Manatrank</button>
+    </div></div>`;
+  });
+  html += `<div class="panel-box"><div class="action-row"><button class="primary" data-action="back-to-world">Zurück zur Weltkarte</button></div></div>`;
   return html;
 }
 
@@ -1573,8 +1856,17 @@ function renderBattleScreen(){
   html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
     <button data-action="wait" ${battle.mode==='attacking'?'':'disabled'}>Warten</button>
     <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
-    <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>
-  </div></div>`;
+    <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>`;
+  if(battle.selected && battle.selected.team==='player' && !battle.selected.hasActed){
+    const su = battle.selected;
+    if(su.healPotions>0 && su.hp<su.maxHp){
+      html += `<button data-action="use-potion" data-potion="healPotions">Heiltrank trinken (+5 HP, ${su.healPotions})</button>`;
+    }
+    if(su.isMage && su.manaPotions>0 && su.mag<su.maxMag){
+      html += `<button data-action="use-potion" data-potion="manaPotions">Manatrank trinken (+5 MP, ${su.manaPotions})</button>`;
+    }
+  }
+  html += `</div></div>`;
 
   // 2) Magie-Menü (nur wenn Magier ausgewählt, genug MP hat und mind. ein Ziel in Reichweite ist)
   if(battle.selected && battle.selected.isMage && battle.selected.team==='player' && !battle.selected.hasActed && mageHasCastableSpell(battle.selected)){
@@ -1761,14 +2053,26 @@ function attachHandlers(){
         const ref = kind==='village' ? game.world.villages[idx]
           : kind==='camp' ? game.world.camps[idx]
           : kind==='castle' ? game.world.castles[idx]
+          : kind==='rumor' ? game.rumor.camps[idx]
           : game.offensive.camps[idx];
         pendingLocation = {kind, ref};
         screen='confirm';
         render();
       }
+      else if(action==='open-shop'){ screen='shop'; render(); }
+      else if(action==='open-camp'){ screen='camp'; render(); }
+      else if(action==='back-to-world'){ screen='world'; render(); }
+      else if(action==='buy-potion'){ buyPotion(el.getAttribute('data-potion')); render(); }
+      else if(action==='buy-weapon'){ buyWeaponTier(el.getAttribute('data-weapon'), el.getAttribute('data-tier')); render(); }
+      else if(action==='buy-armor'){ buyArmorTier(el.getAttribute('data-tier')); render(); }
+      else if(action==='equip-weapon'){ const u=findUnitById(el.getAttribute('data-id')); if(u) setWeaponTier(u, el.getAttribute('data-tier')); render(); }
+      else if(action==='equip-armor'){ const u=findUnitById(el.getAttribute('data-id')); if(u) setArmorTier(u, el.getAttribute('data-tier')); render(); }
+      else if(action==='potion-to-unit'){ const u=findUnitById(el.getAttribute('data-id')); if(u) movePotionToUnit(u, el.getAttribute('data-potion')); render(); }
+      else if(action==='potion-to-pool'){ const u=findUnitById(el.getAttribute('data-id')); if(u) movePotionToPool(u, el.getAttribute('data-potion')); render(); }
       else if(action==='cancel-loc'){ pendingLocation=null; screen='world'; render(); }
       else if(action==='confirm-loc'){ generateBattle(pendingLocation); screen='battle'; render(); }
       else if(action==='wait'){ waitAction(); }
+      else if(action==='use-potion'){ usePotionInBattle(el.getAttribute('data-potion')); }
       else if(action==='end-phase'){ endPlayerPhase(); }
       else if(action==='retreat'){ if(confirm('Wirklich zurückziehen? Dies zählt als Niederlage für die Weltkonsequenzen.')) retreatBattle(); }
       else if(action==='confirm-deploy'){ confirmDeployment(); }
