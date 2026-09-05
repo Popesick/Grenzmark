@@ -158,6 +158,38 @@ const WEAPON_TRIANGLE = { SCHWERT:'AXT', AXT:'SPEER', SPEER:'SCHWERT' }; // Schl
 const WEAPON_LETTER = { SCHWERT:'S', AXT:'A', SPEER:'P' };
 const WEAPON_NAME = { SCHWERT:'Schwert', AXT:'Axt', SPEER:'Speer' };
 const WEAPON_COLOR = { SCHWERT:'#8fa8c9', AXT:'#c98f6b', SPEER:'#a7c98f' };
+const WEAPON_SPRITE_SLUG = { SCHWERT:'sword', AXT:'axe', SPEER:'pole' };
+
+/* ===================== Kampfkarten-Sprites ===================== */
+// Bildpfad je Einheit: eigene Kämpfer <waffe>[_f].png, Banditen bandit_<waffe>[_f].png,
+// feindliche Söldner (Burgen) hostile_<waffe>[_f].png. Magier immer "magic". Fehlt eine
+// Grafik, wird automatisch auf den bisherigen Kreis-Platzhalter zurückgefallen.
+function spriteSlugForUnit(u){
+  return u.isMage ? 'magic' : (WEAPON_SPRITE_SLUG[u.weapon] || 'sword');
+}
+function spritePrefixForUnit(u){
+  if(u.team!=='enemy') return '';
+  return u.enemyKind==='hostile' ? 'hostile_' : 'bandit_';
+}
+function spritePath(u){
+  const prefix = spritePrefixForUnit(u);
+  const slug = spriteSlugForUnit(u);
+  const female = u.gender==='w' ? '_f' : '';
+  return `graphics/sprites/${prefix}${slug}${female}.png`;
+}
+const SPRITE_CACHE = {};
+function getSprite(path){
+  let entry = SPRITE_CACHE[path];
+  if(!entry){
+    const img = new Image();
+    entry = { img, loaded:false, failed:false };
+    img.onload = ()=>{ entry.loaded=true; if(screen==='battle') render(); };
+    img.onerror = ()=>{ entry.failed=true; };
+    img.src = path;
+    SPRITE_CACHE[path] = entry;
+  }
+  return entry;
+}
 const WEAPON_TRIANGLE_BONUS = { hit:12, dmg:2 }; // konfigurierbar (Spec: 10-15 / 1-2)
 const FLANK_BONUS = { hit:10, dmg:2 }; // pro zusätzlichem angrenzenden Verbündeten am Ziel (konfigurierbar, Erweiterung über die Spec hinaus)
 const TILE = 32;
@@ -187,7 +219,10 @@ const SFX_FILES = {
   death_m2: 'audio/effects/death_m2.mp3',
   death_w1: 'audio/effects/death_w1.mp3',
   death_w2: 'audio/effects/death_w2.mp3',
-  ping:     'audio/effects/ping.mp3'
+  ping:     'audio/effects/ping.mp3',
+  fireball: 'audio/effects/fireball.mp3',
+  healing:  'audio/effects/healing.mp3',
+  shield:   'audio/effects/shield.mp3'
 };
 const SFX = {};
 Object.entries(SFX_FILES).forEach(([key, path])=>{
@@ -698,6 +733,7 @@ function generateBattle(loc){
   roster.forEach(u=>{ u.alive=true; u.hp=u.maxHp; u.hasMoved=false; u.hasActed=false; u.team='player'; u.defBuff=0; u.defBuffRounds=0; });
 
   const groups = getEnemyGroups(loc);
+  const enemyKind = (loc.kind==='village' || loc.kind==='camp') ? 'bandit' : 'hostile';
   const enemies=[];
   let counter=0;
   groups.forEach(g=>{
@@ -707,8 +743,8 @@ function generateBattle(loc){
       const maxHp = Math.floor(rng()*11)+15+bonus*3;
       enemies.push({
         id:'e'+counter, name: enemySingular(loc)+' '+(counter+1),
-        team:'enemy', isAlly:false, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank:'Gegner',
-        atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0,
+        team:'enemy', isAlly:false, isMage:false, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank:'Gegner',
+        atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0, maxMag:0,
         maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
       });
       counter++;
@@ -868,7 +904,7 @@ function castSpell(mage, target, spellKey){
     const terrainDef = TERRAIN[battle.grid[target.y][target.x]].def;
     let hitChance = 70 + (mage.spd - target.spd);
     hitChance = Math.max(5, Math.min(95, hitChance));
-    playSfx('hit');
+    playSfx('fireball');
     applyXP(mage, randInt(5,10));
     if(Math.random()*100 < hitChance){
       let dmg = Math.round(mage.atk) - target.def - (target.defBuff||0) - terrainDef;
@@ -888,11 +924,13 @@ function castSpell(mage, target, spellKey){
     }
     checkBattleEnd();
   } else if(spellKey==='verteidigung'){
+    playSfx('shield');
     target.defBuff = 10;
     target.defBuffRounds = 2;
     logMsg(`${mage.name} verstärkt die Verteidigung von ${target.name} um 10 (für 2 Runden).`);
     applyXP(mage, Math.round(randInt(5,10)/2));
   } else if(spellKey==='heilung'){
+    playSfx('healing');
     const before = target.hp;
     target.hp = Math.min(target.maxHp, target.hp+5);
     logMsg(`${mage.name} heilt ${target.name} um ${target.hp-before} HP.`);
@@ -1625,14 +1663,20 @@ function drawBattleCanvas(){
   // units
   battle.units.filter(u=>u.alive).forEach(u=>{
     const cx = u.x*TILE+TILE/2, cy=u.y*TILE+TILE/2;
-    let fill = u.team==='enemy' ? '#a3453b' : (u.isAlly ? '#5f8f61' : (u.isMage ? '#7a5ea8' : '#c6a153'));
-    if(battle.selected===u || battle.deploySelected===u || battle.inspecting===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,13,0,Math.PI*2); ctx.stroke(); }
-    ctx.fillStyle=fill;
-    ctx.beginPath(); ctx.arc(cx,cy,11,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=1; ctx.stroke();
-    ctx.fillStyle= u.team==='enemy' ? '#fff' : '#1a1408';
-    ctx.font='bold 11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(u.isMage ? 'M' : WEAPON_LETTER[u.weapon], cx, cy+1);
+    const sprite = getSprite(spritePath(u));
+    const useSprite = sprite.loaded && !sprite.failed;
+    if(battle.selected===u || battle.deploySelected===u || battle.inspecting===u) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,14,0,Math.PI*2); ctx.stroke(); }
+    if(useSprite){
+      ctx.drawImage(sprite.img, u.x*TILE, u.y*TILE, TILE, TILE);
+    } else {
+      let fill = u.team==='enemy' ? '#a3453b' : (u.isAlly ? '#5f8f61' : (u.isMage ? '#7a5ea8' : '#c6a153'));
+      ctx.fillStyle=fill;
+      ctx.beginPath(); ctx.arc(cx,cy,11,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=1; ctx.stroke();
+      ctx.fillStyle= u.team==='enemy' ? '#fff' : '#1a1408';
+      ctx.font='bold 11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(u.isMage ? 'M' : WEAPON_LETTER[u.weapon], cx, cy+1);
+    }
     // hp bar
     const pct = Math.max(0,u.hp/u.maxHp);
     ctx.fillStyle='#111528'; ctx.fillRect(u.x*TILE+4,u.y*TILE+2,TILE-8,3);
