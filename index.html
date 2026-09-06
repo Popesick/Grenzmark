@@ -277,7 +277,7 @@ function toggleSprites(){ useSprites = !useSprites; render(); }
 let showTutorial = true; // Ein-/Ausblenden der Tutorial-/Hilfe-Boxen im Kampf
 function toggleTutorial(){ showTutorial = !showTutorial; render(); }
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
-const GAME_VERSION = '0.3.0'; // Kalender, Dorf-Verfall, Feldlager, Spähertrupp, Söldner-Rekrutierung u.v.m.
+const GAME_VERSION = '0.3.1'; // Trigger-Fix, Feldlager-Überfälle auf gesicherte Burgen, Joric-Aufstiegswahl, Speicherfixe
 const MONTH_NAMES = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
 function formatDate(monthIndex){
   const total = 9 + monthIndex; // Start: Oktober (Index 9) 503
@@ -547,7 +547,7 @@ function initGame(){
         {id:'rumor1', idx:1, name:'Verborgenes Lager', cleared:false}
       ]
     },
-    fieldCamp:{ id:'feldlager', name:'Feindliches Feldlager', unlocked:false, destroyed:false },
+    fieldCamp:{ id:'feldlager', name:'Feindliches Feldlager', unlocked:false, destroyed:false, raidTargetIdx:null },
     scoutPatrol:{ id:'spaeher', name:'Spähertrupp', unlocked:false, cleared:false },
     log:[]
   };
@@ -719,37 +719,29 @@ function createLeveledMerc(level, usedNames){
     ...baseEquipFields()
   };
 }
-function checkCastlesCompleted(){
+function checkNextStageTrigger(){
+  // Regel: Ist die Belagerung der Burgen aktuell beendet (keine Burg gerade aktiv belagert)
+  // UND sind die Banditen im Westen besiegt (alle Dörfer befreit, alle Lager zerstört),
+  // werden Gegenschlag, Gerüchte-Questreihe und Feldlager gemeinsam ausgelöst.
   if(game.offensive.unlocked) return;
-  const allSafe = game.world.castles.every(c=>!c.fallen);
-  const frontDone = game.world.activeCastle >= game.world.castles.length;
-  if(allSafe && frontDone){
-    const usedNames = new Set(game.mercs.map(m=>m.name));
-    usedNames.add(game.excludedMageName);
-    const merc = createLeveledMerc(10, usedNames);
-    game.mercs.push(merc);
-    logMsg(`${merc.name} (Level 10) schließt sich als Verstärkung des Königs der Truppe an.`);
-    queueModal(
-      `Der König lobt euren Erfolg an der Nordgrenze. Er trägt euch auf, den Gegenschlag zu unterstützen und in feindliches Gebiet vorzudringen. ${merc.name} (Level 10) schließt sich als Verstärkung eurer Truppe an.`,
-      ()=>{ game.offensive.unlocked=true; }, 'dismiss', merc
-    );
-    game.rumor.unlocked = true;
-    game.rumor.actionsSince = 0;
-    queueModal('Gerüchte wabern umher, dass eine geheimnisvolle Macht die Angreifer aus ihren Landen vertrieben hat. Gehe den Gerüchten nach.');
-  }
-}
-function checkFieldCampTrigger(){
-  // Sobald die erste Burg gesichert ist und gerade keine Burg aktiv belagert wird, verrät das
-  // die ungewöhnliche Ruhe an der Front — das feindliche Feldlager dahinter wird sofort aufgedeckt,
-  // unabhängig davon, ob bereits alle 5 Burgen einzeln abgearbeitet wurden.
-  if(game.fieldCamp.unlocked) return;
-  const firstCastleSecured = game.world.activeCastle > 0 && !game.world.castles[0].fallen;
   const noActiveSiege = game.world.castles.every(c=>!c.fallen && c.siege===0);
-  if(firstCastleSecured && noActiveSiege){
-    game.fieldCamp.unlocked = true;
-    game.scoutPatrol.unlocked = true;
-    queueModal('Kundschafter melden ein feindliches Feldlager jenseits der Grenze. Solange es besteht, könnten die Burgen erneut angegriffen werden.');
-  }
+  const banditsDefeated = game.world.villages.every(v=>v.liberated) && game.world.camps.every(c=>c.cleared);
+  if(!(noActiveSiege && banditsDefeated)) return;
+  const usedNames = new Set(game.mercs.map(m=>m.name));
+  usedNames.add(game.excludedMageName);
+  const merc = createLeveledMerc(10, usedNames);
+  game.mercs.push(merc);
+  logMsg(`${merc.name} (Level 10) schließt sich als Verstärkung des Königs der Truppe an.`);
+  queueModal(
+    `Der König lobt euren Erfolg an der Nordgrenze. Er trägt euch auf, den Gegenschlag zu unterstützen und in feindliches Gebiet vorzudringen. ${merc.name} (Level 10) schließt sich als Verstärkung eurer Truppe an.`,
+    ()=>{ game.offensive.unlocked=true; }, 'dismiss', merc
+  );
+  game.rumor.unlocked = true;
+  game.rumor.actionsSince = 0;
+  queueModal('Gerüchte wabern umher, dass eine geheimnisvolle Macht die Angreifer aus ihren Landen vertrieben hat. Gehe den Gerüchten nach.');
+  game.fieldCamp.unlocked = true;
+  game.scoutPatrol.unlocked = true;
+  queueModal('Kundschafter melden ein feindliches Feldlager jenseits der Grenze. Solange es besteht, könnten die Burgen erneut angegriffen werden.');
 }
 function checkOffensiveCompleted(){
   if(game.offensive.completed) return;
@@ -807,7 +799,29 @@ function levelUp(unit){
     unit.maxMag+=magGain; unit.mag=Math.min(unit.maxMag,unit.mag+magGain);
   }
   logMsg(`${unit.name} erreicht Level ${unit.level}.`);
-  if(unit.level>=20 && !unit.promoted){ promote(unit); }
+  if(unit.level>=20 && !unit.promoted){
+    if(unit.isMage){
+      queueModal(`${unit.name} hat Level 20 erreicht. Erzmagier: alle Zauber wirken doppelt so stark, kosten aber dreimal so viel Mana; Feuerball erhält Reichweite 3 und eine Chance auf Feuerschaden. Nekromant: erlernt drei neue dunkle Zauber (Schwächen, Manipulieren, Todesfluch). Wähle den Aufstiegspfad für ${unit.name}.`, null, 'mage-choice', unit);
+    } else {
+      promote(unit);
+    }
+  }
+}
+function applyMagePromotionChoice(unit, choice){
+  unit.promoted = true;
+  unit.level = 1;
+  unit.magePath = choice;
+  const b=()=>randInt(1,5);
+  unit.atk+=b(); unit.def+=b(); unit.spd+=b();
+  const hb=b(); unit.maxHp+=hb; unit.hp=unit.maxHp;
+  const magGain=b(); unit.maxMag+=magGain; unit.mag=unit.maxMag;
+  if(choice==='erzmagier'){
+    unit.rank='Erzmagier';
+    logMsg(`${unit.name} steigt zum Erzmagier auf! Alle Zauber wirken doppelt so stark, kosten aber dreimal so viel Mana.`);
+  } else {
+    unit.rank='Nekromant';
+    logMsg(`${unit.name} steigt zum Nekromanten auf und erlernt neue, dunkle Zauber.`);
+  }
 }
 function promote(unit){
   unit.promoted=true;
@@ -1207,24 +1221,68 @@ const SPELLS = {
   verteidigung: { name:'Verteidigung', cost:3, range:3, targetTeam:'ally'  },
   heilung:      { name:'Heilung',      cost:2, range:3, targetTeam:'ally'  }
 };
+const NEKROMANT_SPELLS = {
+  schwaechen:   { name:'Schwächen',     cost:10, range:3, targetTeam:'enemy' },
+  manipulieren: { name:'Manipulieren',  cost:15, range:2, targetTeam:'enemy' },
+  todesfluch:   { name:'Todesfluch',    cost:12, range:3, targetTeam:'enemy' }
+};
+function getSpellDef(mage, key){
+  return SPELLS[key] || (mage.magePath==='nekromant' ? NEKROMANT_SPELLS[key] : null);
+}
+function getAvailableSpellKeys(mage){
+  const keys = Object.keys(SPELLS);
+  if(mage.magePath==='nekromant') keys.push(...Object.keys(NEKROMANT_SPELLS));
+  return keys;
+}
+function spellRangeFor(mage, key, spell){
+  if(key==='feuerball' && mage.magePath==='erzmagier') return 3; // Erzmagier: erweiterte Feuerball-Reichweite
+  return spell.range;
+}
+function spellCostFor(mage, spell){
+  return mage.magePath==='erzmagier' ? spell.cost*3 : spell.cost;
+}
 function manhattan(a,b){ return Math.abs(a.x-b.x)+Math.abs(a.y-b.y); }
 function validSpellTargets(mage, spellKey){
-  const spell = SPELLS[spellKey];
+  const spell = getSpellDef(mage, spellKey);
+  if(!spell) return [];
+  const range = spellRangeFor(mage, spellKey, spell);
   return battle.units.filter(u=>{
     if(!u.alive) return false;
     if(spell.targetTeam==='enemy' && u.team===mage.team) return false;
     if(spell.targetTeam==='ally' && u.team!==mage.team) return false;
-    return manhattan(mage,u) <= spell.range;
+    return manhattan(mage,u) <= range;
   });
 }
 function mageHasCastableSpell(mage){
-  return Object.entries(SPELLS).some(([key,spell]) => mage.mag>=spell.cost && validSpellTargets(mage,key).length>0);
+  return getAvailableSpellKeys(mage).some(key => {
+    const spell = getSpellDef(mage,key);
+    return mage.mag>=spellCostFor(mage,spell) && validSpellTargets(mage,key).length>0;
+  });
+}
+function applyWeaken(target){
+  removeWeaken(target);
+  const atkCut = Math.round(target.atk*0.5), defCut = Math.round(target.def*0.5), spdCut = Math.round(target.spd*0.5);
+  target.atk -= atkCut; target.def -= defCut; target.spd -= spdCut;
+  target.weakenApplied = {atk:atkCut, def:defCut, spd:spdCut};
+  target.weakenRounds = 3;
+}
+function removeWeaken(target){
+  if(target.weakenApplied){
+    target.atk += target.weakenApplied.atk;
+    target.def += target.weakenApplied.def;
+    target.spd += target.weakenApplied.spd;
+    target.weakenApplied = null;
+  }
+  target.weakenRounds = 0;
 }
 function castSpell(mage, target, spellKey){
-  const spell = SPELLS[spellKey];
-  if(mage.mag < spell.cost) return;
-  mage.mag -= spell.cost;
+  const spell = getSpellDef(mage, spellKey);
+  if(!spell) return;
+  const cost = spellCostFor(mage, spell);
+  if(mage.mag < cost) return;
+  mage.mag -= cost;
   battle.damagePopups = [];
+  const dmgMult = mage.magePath==='erzmagier' ? 2 : 1;
   if(spellKey==='feuerball'){
     const terrainDef = TERRAIN[battle.grid[target.y][target.x]].def;
     // Magie gilt gegen nicht-magische Gegner immer als überlegene Waffe im Sinne des Waffendreiecks.
@@ -1235,11 +1293,15 @@ function castSpell(mage, target, spellKey){
     const xpMult = xpMultiplier(mage, target);
     applyXP(mage, Math.max(1,Math.round(randInt(5,10)*xpMult)));
     if(Math.random()*100 < hitChance){
-      let dmg = Math.round(mage.atk) + tri.dmg - target.def - (target.defBuff||0) - terrainDef;
+      let dmg = Math.round(mage.atk*dmgMult) + tri.dmg - target.def - (target.defBuff||0) - terrainDef;
       dmg = Math.max(1, dmg);
       target.hp -= dmg;
       pushDamagePopup(target.x, target.y, '-'+dmg, '#ff6b5e');
       logMsg(`${mage.name} trifft ${target.name} mit einem Feuerball (${dmg} Schaden).`);
+      if(mage.magePath==='erzmagier' && Math.random()<0.30){
+        target.burnRounds = 3;
+        logMsg(`${target.name} steht in Flammen.`);
+      }
       if(target.hp<=0){
         target.hp=0; target.alive=false;
         applyXP(mage, Math.max(1,Math.round(randInt(20,40)*xpMult)));
@@ -1253,16 +1315,28 @@ function castSpell(mage, target, spellKey){
     checkBattleEnd();
   } else if(spellKey==='verteidigung'){
     playSfx('shield');
-    target.defBuff = 10;
+    target.defBuff = 10*dmgMult;
     target.defBuffRounds = 2;
-    logMsg(`${mage.name} verstärkt die Verteidigung von ${target.name} um 10 (für 2 Runden).`);
+    logMsg(`${mage.name} verstärkt die Verteidigung von ${target.name} um ${target.defBuff} (für 2 Runden).`);
     applyXP(mage, Math.round(randInt(5,10)/2));
   } else if(spellKey==='heilung'){
     playSfx('healing');
     const before = target.hp;
-    target.hp = Math.min(target.maxHp, target.hp+5);
+    target.hp = Math.min(target.maxHp, target.hp+5*dmgMult);
     logMsg(`${mage.name} heilt ${target.name} um ${target.hp-before} HP.`);
     applyXP(mage, 10);
+  } else if(spellKey==='schwaechen'){
+    applyWeaken(target);
+    logMsg(`${mage.name} schwächt ${target.name} — Werte für 3 Runden halbiert.`);
+    applyXP(mage, randInt(5,10));
+  } else if(spellKey==='manipulieren'){
+    target.manipulateRounds = 3;
+    logMsg(`${mage.name} manipuliert ${target.name} — kämpft für 3 Runden gegen die eigenen Kameraden.`);
+    applyXP(mage, randInt(5,10));
+  } else if(spellKey==='todesfluch'){
+    target.curseRounds = 3;
+    logMsg(`${mage.name} belegt ${target.name} mit dem Todesfluch.`);
+    applyXP(mage, randInt(5,10));
   }
   mage.hasActed = true;
   battle.selected=null; battle.attackRange=null; battle.moveRange=null; battle.castingSpell=null; battle.mode='idle';
@@ -1367,8 +1441,8 @@ function usePotionInBattle(kind){
 function startCastingSpell(spellKey){
   const mage = battle.selected;
   if(!mage || !mage.isMage || mage.hasActed) return;
-  const spell = SPELLS[spellKey];
-  if(!spell || mage.mag < spell.cost) return;
+  const spell = getSpellDef(mage, spellKey);
+  if(!spell || mage.mag < spellCostFor(mage,spell)) return;
   battle.castingSpell = spellKey;
   battle.moveRange = null;
   battle.attackRange = new Set(validSpellTargets(mage, spellKey).map(t=>t.x+','+t.y));
@@ -1490,6 +1564,29 @@ function runEnemyStep(){
   setTimeout(runEnemyStep, 400);
 }
 function performEnemyAction(enemy){
+  // -1) Manipulierte Einheiten kämpfen für die Dauer des Effekts gegen die eigenen Kameraden.
+  if(enemy.manipulateRounds>0){
+    const allies = battle.units.filter(u=>u.team===enemy.team && u.alive && u!==enemy);
+    if(allies.length){
+      const reachable = computeReachable(enemy);
+      let best=null;
+      allies.forEach(ally=>{
+        [[ally.x,ally.y-1],[ally.x,ally.y+1],[ally.x-1,ally.y],[ally.x+1,ally.y]].forEach(([nx,ny])=>{
+          const key=nx+','+ny;
+          if(reachable[key]!==undefined){
+            if(!best || reachable[key]<best.cost) best={cost:reachable[key], tile:[nx,ny], target:ally};
+          }
+        });
+      });
+      if(best){
+        if(best.tile[0]!==enemy.x || best.tile[1]!==enemy.y){ enemy.x=best.tile[0]; enemy.y=best.tile[1]; }
+        resolveCombat(enemy, best.target);
+      } else {
+        logMsg(`${enemy.name} kann in seiner Verwirrung niemanden erreichen.`);
+      }
+    }
+    return;
+  }
   // 0) Kampfmagier bevorzugen Zaubersprüche: erst Heilung für verwundete Verbündete, dann Feuerball.
   if(enemy.isMage){
     if(enemy.mag>=SPELLS.heilung.cost){
@@ -1574,7 +1671,31 @@ function tickBuffs(){
       u.defBuffRounds--;
       if(u.defBuffRounds<=0){ u.defBuffRounds=0; u.defBuff=0; }
     }
+    if(u.burnRounds>0 && u.alive){
+      const dmg = randInt(1,4);
+      u.hp = Math.max(0, u.hp-dmg);
+      logMsg(`${u.name} erleidet ${dmg} Feuerschaden.`);
+      pushDamagePopup(u.x,u.y,'-'+dmg,'#ff9640');
+      u.burnRounds--;
+      if(u.hp<=0 && u.alive){ u.alive=false; logMsg(`${u.name} wurde vom Feuer verzehrt.`); playDeathSfx(u); }
+    }
+    if(u.curseRounds>0 && u.alive){
+      const dmg = randInt(4,7);
+      u.hp = Math.max(0, u.hp-dmg);
+      logMsg(`${u.name} leidet unter dem Todesfluch (${dmg} Schaden).`);
+      pushDamagePopup(u.x,u.y,'-'+dmg,'#8a5ea8');
+      u.curseRounds--;
+      if(u.hp<=0 && u.alive){ u.alive=false; logMsg(`${u.name} erliegt dem Todesfluch.`); playDeathSfx(u); }
+    }
+    if(u.weakenRounds>0){
+      u.weakenRounds--;
+      if(u.weakenRounds<=0) removeWeaken(u);
+    }
+    if(u.manipulateRounds>0){
+      u.manipulateRounds--;
+    }
   });
+  checkBattleEnd();
 }
 function regenMana(){
   battle.units.forEach(u=>{
@@ -1628,7 +1749,7 @@ function endBattle(outcome){
         game.world.castles.forEach(c=>{ c.fallen=false; c.siege=0; });
         game.world.activeCastle = game.world.castles.length;
         logMsg('Die Nordgrenze gilt als gesichert.');
-        checkCastlesCompleted();
+        checkNextStageTrigger();
       } else {
         logMsg(`Der Versuch, ${loc.ref.name} zurückzuerobern, ist gescheitert.`);
       }
@@ -1641,7 +1762,7 @@ function endBattle(outcome){
           game.world.activeCastle = loc.ref.idx+1;
           logMsg(`Die Front rückt weiter vor: ${loc.ref.name} ist gesichert.`);
         }
-        checkCastlesCompleted();
+        checkNextStageTrigger();
       } else {
         logMsg(`Die Verteidigung von ${loc.ref.name} ist gescheitert.`);
         advanceCastleSiege(randInt(30,45));
@@ -1692,7 +1813,7 @@ function endBattle(outcome){
   game.month++;
   advanceVillageOccupation();
   reactivateSupplyCamps();
-  checkFieldCampTrigger();
+  checkNextStageTrigger();
   attemptFieldCampCastleRaid();
   checkPassiveIncome();
   checkGameCompleted();
@@ -1724,10 +1845,12 @@ function villageStateLabel(v){
   return 'Banditenstützpunkt';
 }
 function reactivateSupplyCamps(){
-  // Versorgungslager werden 4 Runden nach ihrer Zerstörung vom Feind erneut errichtet.
+  // Versorgungslager werden 5 Runden nach ihrer Zerstörung vom Feind erneut errichtet —
+  // außer das Feldlager wurde bereits zerstört, dann fehlt die Unterstützung dafür endgültig.
   if(!game.offensive.unlocked) return;
+  if(game.fieldCamp && game.fieldCamp.destroyed) return;
   game.offensive.camps.forEach(c=>{
-    if(c.cleared && c.clearedAtMonth!=null && (game.month - c.clearedAtMonth) >= 4){
+    if(c.cleared && c.clearedAtMonth!=null && (game.month - c.clearedAtMonth) >= 5){
       c.cleared = false;
       c.clearedAtMonth = null;
       logMsg('Der Feind hat das Versorgungslager erneut errichtet.');
@@ -1736,20 +1859,36 @@ function reactivateSupplyCamps(){
   });
 }
 function attemptFieldCampCastleRaid(){
-  // Solange das Feldlager besteht, kann es auch nach vollständig gesicherter Nordgrenze
-  // erneut eine einzelne Burg angreifen.
+  // Solange das Feldlager besteht, kann es auch bereits gesicherte Burgen erneut angreifen —
+  // allerdings nur mit einem allmählichen Belagerungsfortschritt von 10-20%/Runde statt eines Sprungs,
+  // und nie die Burg, die gerade ohnehin schon aktiv an der Front belagert wird.
   if(!game.fieldCamp || !game.fieldCamp.unlocked || game.fieldCamp.destroyed) return;
-  const castlesSecure = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
-  if(!castlesSecure) return; // eine Burg wird ohnehin schon aktiv bedroht
+  if(game.fieldCamp.raidTargetIdx!=null){
+    const castle = game.world.castles[game.fieldCamp.raidTargetIdx];
+    if(!castle || castle.fallen || castle.siege<=0){
+      game.fieldCamp.raidTargetIdx = null;
+    } else {
+      castle.siege = Math.min(100, castle.siege + randInt(10,20));
+      if(castle.siege>=100){
+        castle.fallen = true;
+        game.world.activeCastle = Math.min(game.world.activeCastle, castle.idx);
+        logMsg(`${castle.name} ist durch einen Überfall aus dem feindlichen Feldlager gefallen!`);
+        queueModal(`${castle.name} ist durch einen Überfall aus dem feindlichen Feldlager gefallen!`);
+        game.fieldCamp.raidTargetIdx = null;
+      }
+      return; // pro Runde wird immer nur eine Burg angegriffen
+    }
+  }
   const chance = game.scoutPatrol.cleared ? 0.20 : 0.30; // Basiswert um 10 Prozentpunkte gesenkt
   if(Math.random() < chance){
-    const idx = randInt(0, game.world.castles.length-1);
-    const castle = game.world.castles[idx];
-    castle.fallen = false;
-    castle.siege = randInt(30,50);
-    game.world.activeCastle = idx;
-    logMsg(`Truppen aus dem feindlichen Feldlager greifen erneut ${castle.name} an.`);
-    queueModal(`Truppen aus dem feindlichen Feldlager greifen erneut ${castle.name} an!`);
+    const candidates = game.world.castles.filter(c=> !c.fallen && c.idx!==game.world.activeCastle);
+    if(candidates.length){
+      const castle = candidates[randInt(0,candidates.length-1)];
+      game.fieldCamp.raidTargetIdx = castle.idx;
+      castle.siege = Math.min(100, castle.siege + randInt(10,20));
+      logMsg(`Truppen aus dem feindlichen Feldlager greifen ${castle.name} an.`);
+      queueModal(`Truppen aus dem feindlichen Feldlager greifen ${castle.name} an!`);
+    }
   }
 }
 
@@ -1877,6 +2016,11 @@ function unitCardHtml(u, opts){
   const magPct = (u.isMage && u.maxMag>0) ? Math.max(0, Math.round((u.mag/u.maxMag)*100)) : 0;
   const dead = u.alive===false;
   const buffNote = u.defBuffRounds>0 ? ` (+${u.defBuff}, ${u.defBuffRounds}R)` : '';
+  const statusNotes = [];
+  if(u.burnRounds>0) statusNotes.push(`🔥${u.burnRounds}`);
+  if(u.curseRounds>0) statusNotes.push(`💀${u.curseRounds}`);
+  if(u.weakenRounds>0) statusNotes.push(`⬇${u.weakenRounds}`);
+  if(u.manipulateRounds>0) statusNotes.push(`🌀${u.manipulateRounds}`);
   return `<div class="roster-card ${dead?'dead':''}">
     <div class="portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">
       ${portraitImgHtml(u)}
@@ -1888,7 +2032,7 @@ function unitCardHtml(u, opts){
       </div>
       <div class="rank">${u.rank} · Lvl ${u.level} · ${u.isMage?'Magie':WEAPON_NAME[u.weapon]}${dead?' · Kampfunfähig':''}</div>
       <div class="statline-compact">
-        <span>ANG ${u.atk}</span><span>VER ${u.def}${buffNote}</span><span>GES ${u.spd}</span>
+        <span>ANG ${u.atk}</span><span>VER ${u.def}${buffNote}</span><span>GES ${u.spd}</span>${statusNotes.length?`<span title="Statuseffekte">${statusNotes.join(' ')}</span>`:''}
       </div>
       <div class="stat-row"><span class="stat-label">HP</span><span class="stat-num">${Math.max(0,u.hp)}/${u.maxHp}</span><div class="mini-bar"><div class="mini-bar-fill hp" style="width:${hpPct}%"></div></div></div>
       <div class="stat-row"><span class="stat-label">MP</span><span class="stat-num">${u.isMage?u.mag:0}/${u.isMage?u.maxMag:0}</span><div class="mini-bar"><div class="mini-bar-fill mp" style="width:${magPct}%"></div></div></div>
@@ -2125,6 +2269,20 @@ function renderConfirmModal(){
 
 function renderAnnouncementModal(){
   const m = modalQueue[0];
+  if(m.action==='mage-choice'){
+    const portraitHtml = m.unit ? `<div class="modal-portrait" title="Porträt-Pfad: ${portraitPath(m.unit)}">
+        ${portraitImgHtml(m.unit, 'modal-portrait-img', 'modal-portrait-fallback')}
+      </div>` : '';
+    return `<div class="overlay"><div class="modal" style="text-align:center;">
+      ${portraitHtml}
+      <h2>Aufstieg</h2>
+      <p style="color:var(--text-dim);line-height:1.5;text-align:left;">${m.text}</p>
+      <div class="buttons">
+        <button class="primary" data-action="mage-choice-select" data-choice="erzmagier" data-unit-id="${m.unit.id}">Erzmagier</button>
+        <button class="primary" data-action="mage-choice-select" data-choice="nekromant" data-unit-id="${m.unit.id}">Nekromant</button>
+      </div>
+    </div></div>`;
+  }
   const label = m.action==='restart' ? 'Neu beginnen' : 'Weiter';
   const title = m.action==='restart' ? 'Erfolg!' : 'Neuigkeiten';
   const portraitHtml = m.unit ? `<div class="modal-portrait" title="Porträt-Pfad: ${portraitPath(m.unit)}">
@@ -2145,8 +2303,17 @@ function renderBattleScreen(){
   html += '<div id="battle-wrap">';
   html += '<div class="battle-canvas-column">';
   html += `<div id="battle-canvas-holder" style="width:${canvasPx+16}px;height:${canvasPx+16}px;">
-    <canvas id="battleCanvas" width="${canvasPx}" height="${canvasPx}"></canvas>
-  </div>`;
+    <canvas id="battleCanvas" width="${canvasPx}" height="${canvasPx}"></canvas>`;
+  if(battle.outcome){
+    const won = battle.outcome==='victory';
+    const label = won ? 'Sieg' : (battle.outcome==='retreat' ? 'Rückzug' : 'Niederlage');
+    html += `<div class="result-overlay"><div class="result-box ${won?'victory':'defeat'}">
+      <h2>${label}</h2>
+      <p style="color:var(--text-dim);max-width:280px;">${won ? 'Die Truppe hat das Schlachtfeld unter Kontrolle. Alle Einheiten werden vollständig geheilt.' : 'Die Truppe zieht sich zurück in die Hauptstadt und wird dort geheilt. Erfahrung bleibt erhalten.'}</p>
+      <button class="primary" data-action="end-battle">Weiter</button>
+    </div></div>`;
+  }
+  html += `</div>`;
   html += `<div class="zoom-controls">
     <button class="zoom-btn" data-action="zoom-out" title="Kampfkarte verkleinern" ${zoomTile<=16?'disabled':''}>−</button>
     <button class="zoom-btn" data-action="zoom-in" title="Kampfkarte vergrößern" ${zoomTile>=56?'disabled':''}>+</button>
@@ -2189,17 +2356,19 @@ function renderBattleScreen(){
   // 2) Magie-Menü (nur wenn Magier ausgewählt, genug MP hat und mind. ein Ziel in Reichweite ist)
   if(battle.selected && battle.selected.isMage && battle.selected.team==='player' && !battle.selected.hasActed && mageHasCastableSpell(battle.selected)){
     const mage = battle.selected;
-    html += `<div class="panel-box"><h3>Magie (${mage.mag}/${mage.maxMag} MP)</h3><div class="action-row">`;
-    Object.entries(SPELLS).forEach(([key,spell])=>{
+    html += `<div class="panel-box"><h3>Magie (${mage.mag}/${mage.maxMag} MP)${mage.magePath?' · '+(mage.magePath==='erzmagier'?'Erzmagier':'Nekromant'):''}</h3><div class="action-row">`;
+    getAvailableSpellKeys(mage).forEach(key=>{
+      const spell = getSpellDef(mage,key);
+      const cost = spellCostFor(mage,spell);
       const targets = validSpellTargets(mage, key);
-      const disabled = mage.mag < spell.cost || targets.length===0;
+      const disabled = mage.mag < cost || targets.length===0;
       const active = battle.castingSpell===key;
-      html += `<button data-action="cast-spell" data-spell="${key}" ${disabled?'disabled':''} ${active?'class="primary"':''}>${spell.name} (${spell.cost} MP)</button>`;
+      html += `<button data-action="cast-spell" data-spell="${key}" ${disabled?'disabled':''} ${active?'class="primary"':''}>${spell.name} (${cost} MP)</button>`;
     });
     if(battle.mode==='spellTargeting'){
       html += `<button data-action="cancel-spell">Abbruch</button>`;
     }
-    html += `</div><div class="help-text" style="margin:8px 0 0;">Feuerball (Reichweite 2, Schaden) · Verteidigung (Reichweite 3, +10 Verteidigung für 2 Runden) · Heilung (Reichweite 3, +5 HP). Kann vor oder nach der Bewegung gewirkt werden, wie ein Angriff. „Abbruch" wählt keinen Spruch und beendet den Zug.</div></div>`;
+    html += `</div><div class="help-text" style="margin:8px 0 0;">Feuerball (Reichweite ${mage.magePath==='erzmagier'?3:2}, Schaden) · Verteidigung (Reichweite 3, +${mage.magePath==='erzmagier'?20:10} Verteidigung für 2 Runden) · Heilung (Reichweite 3, +${mage.magePath==='erzmagier'?10:5} HP)${mage.magePath==='nekromant'?' · Schwächen/Manipulieren/Todesfluch (neue Nekromant-Zauber)':''}. Kann vor oder nach der Bewegung gewirkt werden, wie ein Angriff. „Abbruch" wählt keinen Spruch und beendet den Zug.</div></div>`;
   }
 
   // 3) Charakter (eigene Einheit ausgewählt, oder Gegner inspiziert)
@@ -2233,16 +2402,6 @@ function renderBattleScreen(){
   }
 
   html += '</div></div>'; // battle-side, battle-wrap
-
-  if(battle.outcome){
-    const won = battle.outcome==='victory';
-    const label = won ? 'Sieg' : (battle.outcome==='retreat' ? 'Rückzug' : 'Niederlage');
-    html += `<div class="result-overlay"><div class="result-box ${won?'victory':'defeat'}">
-      <h2>${label}</h2>
-      <p style="color:var(--text-dim);max-width:280px;">${won ? 'Die Truppe hat das Schlachtfeld unter Kontrolle. Alle Einheiten werden vollständig geheilt.' : 'Die Truppe zieht sich zurück in die Hauptstadt und wird dort geheilt. Erfahrung bleibt erhalten.'}</p>
-      <button class="primary" data-action="end-battle">Weiter</button>
-    </div></div>`;
-  }
 
   return html;
 }
@@ -2375,6 +2534,11 @@ function attachHandlers(){
           : kind==='feldlager' ? game.fieldCamp
           : kind==='spaeher' ? game.scoutPatrol
           : game.offensive.camps[idx];
+        if(kind==='feldlager' && !game.offensive.camps.every(c=>c.cleared)){
+          if(!confirm('Die Versorgungslager unterstützen das Feldlager mit Männern und Ausrüstung. Bist du sicher, dass du das Feldlager jetzt schon attackieren möchtest?')){
+            return;
+          }
+        }
         pendingLocation = {kind, ref};
         screen='confirm';
         render();
@@ -2423,6 +2587,15 @@ function attachHandlers(){
           if(m.action==='restart'){ initGame(); }
           else if(m.onClose){ m.onClose(); }
         }
+        if(modalQueue.length) playSfx('ping');
+        render();
+      }
+      else if(action==='mage-choice-select'){
+        const uid = el.getAttribute('data-unit-id');
+        const choice = el.getAttribute('data-choice');
+        const u = findUnitById(uid);
+        if(u) applyMagePromotionChoice(u, choice);
+        modalQueue.shift();
         if(modalQueue.length) playSfx('ping');
         render();
       }
