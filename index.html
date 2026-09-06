@@ -573,12 +573,22 @@ function grantFirstAllyIfNeeded(){
   if(!a.joined){
     a.joined=true; a.active=true;
     logMsg(`${a.unit.name} schließt sich als Verbündeter der Truppe an.`);
-    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an.`, null, 'dismiss', a.unit);
+    queueModal(`Du hast ${a.unit.name} erreicht. ${a.unit.name} schließt sich deiner Truppe an. Roderick will mit euch die Banditen bekämpfen und unterstützt euch bei euerem Kampf.`, null, 'dismiss', a.unit);
   }
   else if(!a.active && !a.permanent){
     a.active=true;
-    logMsg(`${a.unit.name} schließt sich wieder deiner Party an.`);
-    queueModal(`${a.unit.name} schließt sich wieder deiner Party an.`, null, 'dismiss', a.unit);
+    logMsg(`${a.unit.name} freut sich, euch wieder zu sehen und schließt sich euerem Kampf gegen die Banditen an.`);
+    queueModal(`${a.unit.name} freut sich, euch wieder zu sehen und schließt sich euerem Kampf gegen die Banditen an.`, null, 'dismiss', a.unit);
+  }
+}
+function rejoinFirstAllyBeforeBattle(){
+  // Ist Roderick bereits einmal beigetreten und aktuell abwesend, kämpft er ab diesem Einsatz
+  // gegen die Banditen direkt wieder mit — nicht erst nach einem gewonnenen Kampf.
+  const a = game.firstAlly;
+  if(a.joined && !a.active && !a.permanent){
+    a.active = true;
+    logMsg(`${a.unit.name} freut sich, euch wieder zu sehen und schließt sich euerem Kampf gegen die Banditen an.`);
+    queueModal(`${a.unit.name} freut sich, euch wieder zu sehen und schließt sich euerem Kampf gegen die Banditen an.`, null, 'dismiss', a.unit);
   }
 }
 function allyLeavesOnCastleDefense(){
@@ -680,6 +690,16 @@ function checkCastlesCompleted(){
     game.rumor.unlocked = true;
     game.rumor.actionsSince = 0;
     queueModal('Gerüchte wabern umher, dass eine geheimnisvolle Macht die Angreifer aus ihren Landen vertrieben hat. Gehe den Gerüchten nach.');
+  }
+}
+function checkFieldCampTrigger(){
+  // Sobald die erste Burg gesichert ist und gerade keine Burg aktiv belagert wird, verrät das
+  // die ungewöhnliche Ruhe an der Front — das feindliche Feldlager dahinter wird sofort aufgedeckt,
+  // unabhängig davon, ob bereits alle 5 Burgen einzeln abgearbeitet wurden.
+  if(game.fieldCamp.unlocked) return;
+  const firstCastleSecured = game.world.activeCastle > 0 && !game.world.castles[0].fallen;
+  const noActiveSiege = game.world.castles.every(c=>!c.fallen && c.siege===0);
+  if(firstCastleSecured && noActiveSiege){
     game.fieldCamp.unlocked = true;
     game.scoutPatrol.unlocked = true;
     queueModal('Kundschafter melden ein feindliches Feldlager jenseits der Grenze. Solange es besteht, könnten die Burgen erneut angegriffen werden.');
@@ -1602,6 +1622,7 @@ function endBattle(outcome){
   game.month++;
   advanceVillageOccupation();
   reactivateSupplyCamps();
+  checkFieldCampTrigger();
   attemptFieldCampCastleRaid();
   checkPassiveIncome();
   battle=null; screen='world'; pendingLocation=null;
@@ -2273,7 +2294,14 @@ function attachHandlers(){
       else if(action==='potion-to-unit'){ const u=findUnitById(el.getAttribute('data-id')); if(u) movePotionToUnit(u, el.getAttribute('data-potion')); render(); }
       else if(action==='potion-to-pool'){ const u=findUnitById(el.getAttribute('data-id')); if(u) movePotionToPool(u, el.getAttribute('data-potion')); render(); }
       else if(action==='cancel-loc'){ pendingLocation=null; screen='world'; render(); }
-      else if(action==='confirm-loc'){ generateBattle(pendingLocation); screen='battle'; render(); }
+      else if(action==='confirm-loc'){
+        // Roderick schließt sich wieder an, sobald man sich erneut den Banditen zuwendet —
+        // er soll direkt in diesem Kampf schon mitkämpfen, nicht erst danach.
+        if(pendingLocation.kind==='village' || pendingLocation.kind==='camp'){
+          rejoinFirstAllyBeforeBattle();
+        }
+        generateBattle(pendingLocation); screen='battle'; render();
+      }
       else if(action==='wait'){ waitAction(); }
       else if(action==='use-potion'){ usePotionInBattle(el.getAttribute('data-potion')); }
       else if(action==='end-phase'){ endPlayerPhase(); }
