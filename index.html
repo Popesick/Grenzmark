@@ -277,7 +277,14 @@ function toggleSprites(){ useSprites = !useSprites; render(); }
 let showTutorial = true; // Ein-/Ausblenden der Tutorial-/Hilfe-Boxen im Kampf
 function toggleTutorial(){ showTutorial = !showTutorial; render(); }
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
-const GAME_VERSION = '0.2.1'; // Startparty-Zusammensetzung, Kaufsöldner, feste Dorf-/Lager-Level, Versionszähler
+const GAME_VERSION = '0.3.0'; // Kalender, Dorf-Verfall, Feldlager, Spähertrupp, Söldner-Rekrutierung u.v.m.
+const MONTH_NAMES = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+function formatDate(monthIndex){
+  const total = 9 + monthIndex; // Start: Oktober (Index 9) 503
+  const year = 503 + Math.floor(total/12);
+  const name = MONTH_NAMES[((total%12)+12)%12];
+  return `${name} ${year} n.d.E.`;
+}
 
 /* ===================== Musik & Soundeffekte ===================== */
 // Sucht im Ordner "audio" (relativ zur HTML-Datei) nach den Musik- und Effekt-Dateien.
@@ -498,7 +505,7 @@ let modalQueue = []; // Warteschlange für Dialogboxen (neue Kämpfer, Aufträge
 function initGame(){
   const usedNames = new Set();
   // Genau einer von Hilda/Joric ist als Magier/-in in jeder Party dabei, nie beide, nie keiner.
-  const mageCandidate = Math.random()<0.5 ? 'Hilda' : 'Joric';
+  const mageCandidate = 'Joric'; // Joric ist immer der Magier der Truppe
   const excludedCandidate = mageCandidate==='Hilda' ? 'Joric' : 'Hilda';
   usedNames.add(excludedCandidate);
   const mercs = [makeMageMerc('m0', mageCandidate)];
@@ -507,12 +514,12 @@ function initGame(){
   const weaponSlots = shuffleArray(['SCHWERT','SCHWERT','AXT', ['SCHWERT','AXT','SPEER'][randInt(0,2)]]);
   for(let i=1;i<5;i++) mercs.push(makeMerc('m'+i, usedNames, weaponSlots[i-1]));
 
-  const villages = [0,1,2].map(i=>({id:'dorf'+i, idx:i, name:'Dorf '+(i+1), liberated:false, liberatedAtDay:null}));
+  const villages = [0,1,2].map(i=>({id:'dorf'+i, idx:i, name:'Dorf '+(i+1), liberated:false, occupation:1, destroyed:false, everDestroyed:false}));
   const camps = [0,1,2].map(i=>({id:'lager'+i, idx:i, name:'Banditenlager '+(i+1), visible:false, cleared:false}));
   const castles = [0,1,2,3,4].map(i=>({id:'burg'+i, idx:i, name:'Burg '+(i+1), siege:0, fallen:false}));
 
   game = {
-    day:1,
+    month:0, // 0 = Oktober 503 n.d.E., zählt seither in Monaten weiter
     mercs,
     excludedMageName: excludedCandidate,
     gold: 0,
@@ -528,9 +535,9 @@ function initGame(){
     offensive:{
       unlocked:false, completed:false,
       camps:[
-        {id:'sup0', idx:0, name:'Versorgungslager 1', count:10, level:10, mixed:true,  cleared:false},
-        {id:'sup1', idx:1, name:'Versorgungslager 2', count:15, level:10, mixed:false, cleared:false},
-        {id:'sup2', idx:2, name:'Versorgungslager 3', count:15, level:15, mixed:false, cleared:false}
+        {id:'sup0', idx:0, name:'Versorgungslager 1', count:10, level:10, mixed:true,  cleared:false, clearedAtMonth:null},
+        {id:'sup1', idx:1, name:'Versorgungslager 2', count:15, level:10, mixed:false, cleared:false, clearedAtMonth:null},
+        {id:'sup2', idx:2, name:'Versorgungslager 3', count:15, level:15, mixed:false, cleared:false, clearedAtMonth:null}
       ]
     },
     rumor:{
@@ -540,6 +547,8 @@ function initGame(){
         {id:'rumor1', idx:1, name:'Verborgenes Lager', cleared:false}
       ]
     },
+    fieldCamp:{ id:'feldlager', name:'Feindliches Feldlager', unlocked:false, destroyed:false },
+    scoutPatrol:{ id:'spaeher', name:'Spähertrupp', unlocked:false, cleared:false },
     log:[]
   };
   modalQueue.length = 0;
@@ -671,6 +680,9 @@ function checkCastlesCompleted(){
     game.rumor.unlocked = true;
     game.rumor.actionsSince = 0;
     queueModal('Gerüchte wabern umher, dass eine geheimnisvolle Macht die Angreifer aus ihren Landen vertrieben hat. Gehe den Gerüchten nach.');
+    game.fieldCamp.unlocked = true;
+    game.scoutPatrol.unlocked = true;
+    queueModal('Kundschafter melden ein feindliches Feldlager jenseits der Grenze. Solange es besteht, könnten die Burgen erneut angegriffen werden.');
   }
 }
 function checkOffensiveCompleted(){
@@ -752,6 +764,8 @@ function enemySingular(loc){
   if(loc.kind==='castle') return loc.ref.fallen ? 'Verteidiger' : 'Belagerer';
   if(loc.kind==='supply') return 'Soldat';
   if(loc.kind==='rumor') return 'Schattenkrieger';
+  if(loc.kind==='feldlager') return 'Soldat';
+  if(loc.kind==='spaeher') return 'Späher';
   return 'Gegner';
 }
 function enemyPlural(loc){
@@ -759,15 +773,30 @@ function enemyPlural(loc){
   if(loc.kind==='castle') return loc.ref.fallen ? 'Verteidiger' : 'Belagerer';
   if(loc.kind==='supply') return 'Soldaten';
   if(loc.kind==='rumor') return 'Schattenkrieger';
+  if(loc.kind==='feldlager') return 'Soldaten & Kampfmagier';
+  if(loc.kind==='spaeher') return 'Späher';
   return 'Gegner';
+}
+function getFieldCampStats(){
+  const clearedCount = game.offensive.camps.filter(c=>c.cleared).length;
+  const soldiers = Math.max(0, 20 - 3*clearedCount);
+  let level = getStrongestPartyLevel()+2 - clearedCount;
+  if(clearedCount>=3) level -= 1;
+  return { soldiers, level: Math.max(1, level) };
 }
 function getEnemyGroups(loc){
   if(loc.kind==='village'){
     // Schwierigkeit richtet sich nach der Reihenfolge, in der der Spieler Dörfer befreit (nicht nach Dorf-Index).
     const tier = Math.min(game.world.villageWinCount+1, 3);
-    if(tier===1) return [{count:5, level:1, weapons:['AXT']}];
-    if(tier===2) return [{count:5, level:2, weapons:['AXT']}];
-    return [{count:2, level:2, weapons:['AXT']}, {count:3, level:3, weapons:['AXT']}];
+    let groups;
+    if(tier===1) groups=[{count:5, level:1, weapons:['AXT']}];
+    else if(tier===2) groups=[{count:5, level:2, weapons:['AXT']}];
+    else groups=[{count:2, level:2, weapons:['AXT']}, {count:3, level:3, weapons:['AXT']}];
+    if(loc.ref.occupation>=100){
+      const maxLvl = Math.max(...groups.map(g=>g.level));
+      groups = [...groups, {count:5, level:maxLvl+2, weapons:['AXT']}];
+    }
+    return groups;
   }
   if(loc.kind==='camp'){
     // Feste Level je Stützpunkt (nach Index, nicht nach Reihenfolge des Spielers).
@@ -799,6 +828,16 @@ function getEnemyGroups(loc){
     }
     const lvl2 = Math.max(1, Math.round(avg-1));
     return [{count:15, level:lvl2, weapons:['SCHWERT','AXT','SPEER']}];
+  }
+  if(loc.kind==='feldlager'){
+    const stats = getFieldCampStats();
+    const groups = [];
+    if(stats.soldiers>0) groups.push({count:stats.soldiers, level:stats.level, weapons:['SCHWERT','AXT','SPEER']});
+    groups.push({count:2, level:stats.level, weapons:['SCHWERT'], isMage:true});
+    return groups;
+  }
+  if(loc.kind==='spaeher'){
+    return [{count:5, level:Math.max(1,getStrongestPartyLevel()+1), weapons:['SPEER']}];
   }
   return [];
 }
@@ -904,6 +943,12 @@ function generateBattle(loc){
       // Verteidigung: Burghof + 5 Wachtürme im Süden als eigene Rückzugs-/Heilzone.
       placeSpecialCluster(grid,size,rng,[size-3,size-2,size-1],1,5);
     }
+  } else if(loc.kind==='feldlager'){
+    // Feste Wachturm-Anordnung: Reihe "x_x_x" direkt gefolgt von "_x_x_".
+    const row1 = Math.min(size-2, 5), row2 = row1+1;
+    const startCol = Math.max(0, Math.floor((size-5)/2));
+    [0,2,4].forEach(off=>{ const x=startCol+off; if(x<size){ grid[row1][x]='WACHTURM'; specialTiles.push({x,y:row1,type:'WACHTURM'}); } });
+    [1,3].forEach(off=>{ const x=startCol+off; if(x<size){ grid[row2][x]='WACHTURM'; specialTiles.push({x,y:row2,type:'WACHTURM'}); } });
   }
 
   const roster = getActivePlayerRoster();
@@ -918,10 +963,12 @@ function generateBattle(loc){
       const w = g.weapons[Math.floor(rng()*g.weapons.length)];
       const bonus = g.level-1;
       const maxHp = Math.floor(rng()*11)+15+bonus*3;
+      const isMage = !!g.isMage;
+      const maxMag = isMage ? (Math.floor(rng()*9)+11) : 0;
       enemies.push({
-        id:'e'+counter, name: g.isLeader ? 'Bandenanführer' : (enemySingular(loc)+' '+(counter+1)),
-        team:'enemy', isAlly:false, isMage:false, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank: g.isLeader ? 'Anführer' : 'Gegner',
-        atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:0, maxMag:0,
+        id:'e'+counter, name: g.isLeader ? 'Bandenanführer' : (isMage ? 'Kampfmagier '+(counter+1) : enemySingular(loc)+' '+(counter+1)),
+        team:'enemy', isAlly:false, isMage, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank: g.isLeader ? 'Anführer' : (isMage?'Magier':'Gegner'),
+        atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:maxMag, maxMag,
         maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
       });
       counter++;
@@ -936,8 +983,18 @@ function generateBattle(loc){
   }
   const pSpawns = findSpawnTiles([size-1,size-2], roster.length);
   roster.forEach((u,i)=>{ const s=pSpawns[i]||[i%size,size-1]; u.x=s[0]; u.y=s[1]; });
-  const eSpawns = findSpawnTiles([0,1,2], enemies.length);
-  enemies.forEach((e,i)=>{ const s=eSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
+  if(loc.kind==='feldlager'){
+    // Magier sollen immer in der zweiten Reihe stehen, übrige Truppen in Reihe 1 und 3.
+    const mages = enemies.filter(e=>e.isMage);
+    const others = enemies.filter(e=>!e.isMage);
+    const mageSpawns = findSpawnTiles([1], mages.length);
+    mages.forEach((e,i)=>{ const s=mageSpawns[i]||[i%size,1]; e.x=s[0]; e.y=s[1]; });
+    const otherSpawns = findSpawnTiles([0,2], others.length);
+    others.forEach((e,i)=>{ const s=otherSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
+  } else {
+    const eSpawns = findSpawnTiles([0,1,2], enemies.length);
+    enemies.forEach((e,i)=>{ const s=eSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
+  }
 
   battle = {
     loc, grid, size, units:[...roster,...enemies], specialTiles,
@@ -1343,6 +1400,24 @@ function runEnemyStep(){
   setTimeout(runEnemyStep, 400);
 }
 function performEnemyAction(enemy){
+  // 0) Kampfmagier bevorzugen Zaubersprüche: erst Heilung für verwundete Verbündete, dann Feuerball.
+  if(enemy.isMage){
+    if(enemy.mag>=SPELLS.heilung.cost){
+      const healTargets = validSpellTargets(enemy,'heilung').filter(t=>t!==enemy && t.hp<t.maxHp && (t.hp/t.maxHp)<0.5);
+      if(healTargets.length){
+        healTargets.sort((a,b)=>(a.hp/a.maxHp)-(b.hp/b.maxHp));
+        castSpell(enemy, healTargets[0], 'heilung');
+        return;
+      }
+    }
+    if(enemy.mag>=SPELLS.feuerball.cost){
+      const atkTargets = validSpellTargets(enemy,'feuerball');
+      if(atkTargets.length){
+        castSpell(enemy, atkTargets[0], 'feuerball');
+        return;
+      }
+    }
+  }
   // 1) Steht die Einheit bereits auf einem besonderen Feld (Wachturm/Burg): halten.
   const standingOn = (battle.specialTiles||[]).find(t=>t.x===enemy.x && t.y===enemy.y);
   const adjNow = adjacentOpponents(enemy);
@@ -1434,7 +1509,8 @@ function endBattle(outcome){
   if(loc.kind==='village'){
     if(win){
       loc.ref.liberated=true;
-      loc.ref.liberatedAtDay = game.day;
+      loc.ref.occupation=0;
+      loc.ref.destroyed=false;
       game.world.villageWinCount++;
       game.world.camps[loc.ref.idx].visible=true;
       logMsg(`${loc.ref.name} wurde befreit. Ein verborgener Banditenstützpunkt wird sichtbar.`);
@@ -1484,6 +1560,7 @@ function endBattle(outcome){
   } else if(loc.kind==='supply'){
     if(win){
       loc.ref.cleared=true;
+      loc.ref.clearedAtMonth = game.month;
       logMsg(`${loc.ref.name} wurde ausgehoben.`);
       checkOffensiveCompleted();
     } else {
@@ -1497,42 +1574,102 @@ function endBattle(outcome){
     } else {
       logMsg(`Die Erkundung von ${loc.ref.name} ist gescheitert.`);
     }
+  } else if(loc.kind==='feldlager'){
+    if(win){
+      game.fieldCamp.destroyed = true;
+      logMsg('Das feindliche Feldlager wurde zerstört.');
+      queueModal('Das feindliche Feldlager wurde zerstört. Die Burgen sind nun endgültig sicher.');
+    } else {
+      logMsg('Der Angriff auf das feindliche Feldlager ist gescheitert.');
+    }
+  } else if(loc.kind==='spaeher'){
+    if(win){
+      game.scoutPatrol.cleared = true;
+      logMsg('Der feindliche Spähertrupp wurde ausgeschaltet.');
+      queueModal('Der feindliche Spähertrupp wurde ausgeschaltet. Angriffe des Feldlagers auf die Burgen werden seltener.');
+    } else {
+      logMsg('Der Angriff auf den Spähertrupp ist gescheitert.');
+    }
   }
   if(game.rumor && game.rumor.unlocked && loc.kind!=='rumor'){
     game.rumor.actionsSince++;
   }
   // Weltzeit schreitet an der aktiven Frontburg voran, außer man kämpft dort gerade selbst.
   if(!(loc.kind==='castle' && !loc.ref.fallen)){
-    advanceCastleSiege(randInt(25,34));
+    const siegeGain = game.world.villageReinforcementsSent ? randInt(15,20) : randInt(25,34);
+    advanceCastleSiege(siegeGain);
   }
-  game.day++;
-  checkVillageRecapture();
+  game.month++;
+  advanceVillageOccupation();
+  reactivateSupplyCamps();
+  attemptFieldCampCastleRaid();
   checkPassiveIncome();
   battle=null; screen='world'; pendingLocation=null;
   render();
 }
-function checkVillageRecapture(){
-  // Werden nicht alle Banditenstützpunkte zerstört, holen sich die Banditen befreite Dörfer
-  // nach 3/4/5 Runden seit der Befreiung zurück. Sind alle Stützpunkte zerstört, tritt das Ereignis nie ein.
+function advanceVillageOccupation(){
+  // Dörfer, die nicht befreit sind, werden zunehmend von Banditen übernommen — außer alle Lager sind zerstört.
   if(game.world.camps.every(c=>c.cleared)) return;
-  const thresholds = [3,4,5];
-  game.world.villages.forEach((v,idx)=>{
-    if(v.liberated && v.liberatedAtDay!=null && (game.day - v.liberatedAtDay) >= thresholds[idx]){
-      v.liberated = false;
-      v.liberatedAtDay = null;
-      logMsg('Die Banditen haben ihre Kräfte gesammelt und ein Dorf eingenommen.');
-      queueModal('Die Banditen haben ihre Kräfte gesammelt und ein Dorf eingenommen.');
+  game.world.villages.forEach(v=>{
+    if(v.liberated) return;
+    v.occupation = Math.min(100, (v.occupation||0) + randInt(10,15));
+    if(v.occupation>=100 && !v.destroyed){
+      v.destroyed = true;
+      v.everDestroyed = true;
+      logMsg(`${v.name} wurde vollständig zum Banditenstützpunkt.`);
+      queueModal(`${v.name} wurde von den Banditen vollständig übernommen. Ihre Zahl ist gewachsen, und die Verstärkung ist deutlich stärker als zuvor.`);
     }
   });
+}
+function villageStateLabel(v){
+  if(v.liberated) return 'Befreit';
+  const pct = v.occupation||0;
+  if(pct<=0) return 'Sicher';
+  if(pct<25) return 'Besetzt';
+  if(pct<50) return 'Geplündert';
+  if(pct<75) return 'Gebrandschatzt';
+  if(pct<100) return 'Einwohner vertrieben';
+  return 'Banditenstützpunkt';
+}
+function reactivateSupplyCamps(){
+  // Versorgungslager werden 4 Runden nach ihrer Zerstörung vom Feind erneut errichtet.
+  if(!game.offensive.unlocked) return;
+  game.offensive.camps.forEach(c=>{
+    if(c.cleared && c.clearedAtMonth!=null && (game.month - c.clearedAtMonth) >= 4){
+      c.cleared = false;
+      c.clearedAtMonth = null;
+      logMsg('Der Feind hat das Versorgungslager erneut errichtet.');
+      queueModal('Der Feind hat das Versorgungslager erneut errichtet.');
+    }
+  });
+}
+function attemptFieldCampCastleRaid(){
+  // Solange das Feldlager besteht, kann es auch nach vollständig gesicherter Nordgrenze
+  // erneut eine einzelne Burg angreifen.
+  if(!game.fieldCamp || !game.fieldCamp.unlocked || game.fieldCamp.destroyed) return;
+  const castlesSecure = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
+  if(!castlesSecure) return; // eine Burg wird ohnehin schon aktiv bedroht
+  const chance = game.scoutPatrol.cleared ? 0.30 : 0.40;
+  if(Math.random() < chance){
+    const idx = randInt(0, game.world.castles.length-1);
+    const castle = game.world.castles[idx];
+    castle.fallen = false;
+    castle.siege = randInt(30,50);
+    game.world.activeCastle = idx;
+    logMsg(`Truppen aus dem feindlichen Feldlager greifen erneut ${castle.name} an.`);
+    queueModal(`Truppen aus dem feindlichen Feldlager greifen erneut ${castle.name} an!`);
+  }
 }
 
 function checkPassiveIncome(){
   const villagesCampsDone = game.world.villages.every(v=>v.liberated) && game.world.camps.every(c=>c.cleared);
   if(villagesCampsDone){
-    game.gold += 100;
+    const destroyedCount = game.world.villages.filter(v=>v.everDestroyed).length;
+    game.gold += Math.max(0, 100 - 25*destroyedCount);
     if(!game.villageIncomeAnnounced){
       game.villageIncomeAnnounced = true;
-      queueModal('Die Bauern sind dankbar für euere Hilfe und überweisen euch jeden Monat 100 Gold als Unterstützung.');
+      game.world.villageReinforcementsSent = true;
+      queueModal('Die Bauern sind dankbar für euere Hilfe und überweisen euch jeden Monat 100 Gold als Unterstützung. Die Dörfer sind wieder sicher. Die Dorfbewohner schicken junge wehrfähige Männer mit Vorräten zu den Burgen, um die Festungsanlagen zu verstärken.');
     }
   }
   const castlesSecure = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
@@ -1597,7 +1734,7 @@ function renderHeader(){
       <div class="sub">Taktischer Prototyp · V${GAME_VERSION}</div>
     </div>
     <div class="right">
-      <span class="day-badge">Tag ${game.day}</span>
+      <span class="day-badge">${formatDate(game.month)}</span>
       <span class="day-badge">💰 ${game.gold} Gold</span>
       <button data-action="toggle-music">${musicEnabled ? '🎵 Musik an' : '🎵 Musik aus'}</button>
       <button data-action="toggle-sfx">${sfxEnabled ? '🔊 Sound an' : '🔇 Sound aus'}</button>
@@ -1714,11 +1851,14 @@ function renderWorldScreen(){
 
   html += '<div class="map-region"><h2>Westliche Dörfer &amp; Banditenland</h2><div class="node-row">';
   w.villages.forEach((v,i)=>{
+    const state = villageStateLabel(v);
     if(v.liberated){
       html += `<div class="node success"><div class="n-name">${v.name}</div><div class="n-state">Befreit</div></div>`;
     } else {
-      html += `<div class="node clickable" data-action="select-loc" data-kind="village" data-idx="${i}">
-        <div class="n-name">${v.name}</div><div class="n-state">Von Banditen bedroht</div></div>`;
+      const dangerCls = (v.occupation||0)>=75 ? 'danger' : '';
+      html += `<div class="node clickable ${dangerCls}" data-action="select-loc" data-kind="village" data-idx="${i}">
+        <div class="n-name">${v.name}</div><div class="n-state">${state}</div>
+        <div class="siegebar"><div class="siegebar-inner" style="width:${v.occupation||0}%"></div></div></div>`;
     }
   });
   w.camps.forEach((c,i)=>{
@@ -1761,6 +1901,22 @@ function renderWorldScreen(){
         html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht erreichbar</div></div>`;
       }
     });
+    html += '</div></div>';
+  }
+  if(game.fieldCamp && game.fieldCamp.unlocked){
+    html += '<div class="map-region"><h2>Feindliches Feldlager <span class="hint">solange aktiv, drohen erneute Burgangriffe</span></h2><div class="node-row">';
+    if(game.fieldCamp.destroyed){
+      html += `<div class="node success"><div class="n-name">Feldlager</div><div class="n-state">Zerstört</div></div>`;
+    } else {
+      html += `<div class="node clickable danger" data-action="select-loc" data-kind="feldlager" data-idx="0">
+        <div class="n-name">Feldlager</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+    }
+    if(game.scoutPatrol.cleared){
+      html += `<div class="node success"><div class="n-name">Spähertrupp</div><div class="n-state">Ausgeschaltet</div></div>`;
+    } else {
+      html += `<div class="node clickable" data-action="select-loc" data-kind="spaeher" data-idx="0">
+        <div class="n-name">Spähertrupp</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+    }
     html += '</div></div>';
   }
   return html;
@@ -2098,6 +2254,8 @@ function attachHandlers(){
           : kind==='camp' ? game.world.camps[idx]
           : kind==='castle' ? game.world.castles[idx]
           : kind==='rumor' ? game.rumor.camps[idx]
+          : kind==='feldlager' ? game.fieldCamp
+          : kind==='spaeher' ? game.scoutPatrol
           : game.offensive.camps[idx];
         pendingLocation = {kind, ref};
         screen='confirm';
