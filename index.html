@@ -214,8 +214,8 @@ const ARMOR_TIER_BONUS = {
   silber:    { atk:0, def:25, spd:0 },
   elementar: { atk:5, def:50, spd:5 }
 };
-const WEAPON_TIER_PRICE = { silber:2000, elementar:5000 };
-const ARMOR_TIER_PRICE = { leder:500, eisen:2000, silber:5000, elementar:10000 };
+const WEAPON_TIER_PRICE = { silber:4000, elementar:10000 }; // +100%
+const ARMOR_TIER_PRICE = { leder:1000, eisen:4000, silber:10000, elementar:20000 }; // +100%
 const POTION_PRICE = 25;
 function computeEquipBonus(u){
   const w = WEAPON_TIER_BONUS[u.weaponTier||'stahl'];
@@ -523,7 +523,7 @@ function initGame(){
     mercs,
     excludedMageName: excludedCandidate,
     gold: 0,
-    villageIncomeAnnounced:false, castleIncomeAnnounced:false,
+    villageIncomeAnnounced:false, castleIncomeAnnounced:false, completed:false,
     pool: { healPotions:0, manaPotions:0 },
     shop: {
       weaponTiers: { SCHWERT:{silber:false,elementar:false}, AXT:{silber:false,elementar:false}, SPEER:{silber:false,elementar:false} },
@@ -628,6 +628,13 @@ function findUnitById(id){
   return getActivePlayerRoster().find(u=>u.id===id);
 }
 function effectiveLevel(u){ return u.promoted ? u.level+20 : u.level; }
+function xpMultiplier(attacker, defender){
+  // Gegner gleich stark oder ±1 Level: normale EXP. Darüber hinaus gestaffelter Bonus/Malus.
+  const diff = effectiveLevel(defender) - effectiveLevel(attacker); // positiv = Gegner stärker
+  if(diff>=2) return 1 + Math.min(90,(diff-1)*10)/100;
+  if(diff<=-2) return 1 - Math.min(90,(-diff)*10)/100;
+  return 1;
+}
 function getStrongestPartyLevel(){
   const roster = getActivePlayerRoster();
   if(!roster.length) return 1;
@@ -658,6 +665,45 @@ function hireMercenary(){
   const merc = createLeveledMerc(Math.max(1,weakest.level), usedNames);
   game.mercs.push(merc);
   logMsg(`${merc.name} (Level ${merc.level}) wird für ${price} Gold als Söldner angeworben.`);
+}
+
+/* ===================== Speichern / Laden ===================== */
+const SAVE_SLOTS = 3;
+const SAVE_KEY_PREFIX = 'grenzmark_save_';
+function saveGameToSlot(slot){
+  try{
+    const payload = { game, savedAt: formatDate(game.month), version: GAME_VERSION };
+    localStorage.setItem(SAVE_KEY_PREFIX+slot, JSON.stringify(payload));
+    logMsg(`Spielstand in Slot ${slot} gespeichert (${payload.savedAt}).`);
+  }catch(e){
+    logMsg('Speichern ist fehlgeschlagen (lokaler Speicher nicht verfügbar).');
+  }
+  render();
+}
+function loadGameFromSlot(slot){
+  try{
+    const raw = localStorage.getItem(SAVE_KEY_PREFIX+slot);
+    if(!raw) return;
+    const data = JSON.parse(raw);
+    game = data.game;
+    battle = null; pendingLocation = null; modalQueue.length = 0;
+    screen = 'world';
+    logMsg(`Spielstand aus Slot ${slot} geladen (gespeichert: ${data.savedAt}).`);
+  }catch(e){
+    logMsg('Laden ist fehlgeschlagen.');
+  }
+  render();
+}
+function deleteSaveSlot(slot){
+  try{ localStorage.removeItem(SAVE_KEY_PREFIX+slot); }catch(e){}
+  render();
+}
+function getSaveSlotInfo(slot){
+  try{
+    const raw = localStorage.getItem(SAVE_KEY_PREFIX+slot);
+    if(!raw) return null;
+    return JSON.parse(raw);
+  }catch(e){ return null; }
 }
 function createLeveledMerc(level, usedNames){
   const n = randomName(usedNames);
@@ -709,14 +755,33 @@ function checkOffensiveCompleted(){
   if(game.offensive.completed) return;
   if(game.offensive.camps.every(c=>c.cleared)){
     game.offensive.completed=true;
-    queueModal('Missionen abgeschlossen! Die Grenzmark ist gesichert und der Gegenschlag erfolgreich.', null, 'restart');
+    logMsg('Der Gegenschlag ist abgeschlossen. Die Versorgungslager des Feindes sind ausgehoben.');
+    queueModal('Der Gegenschlag ist abgeschlossen. Die Versorgungslager des Feindes sind ausgehoben.');
   }
+  checkGameCompleted();
 }
 function checkRumorCompleted(){
   if(!game.rumor || game.rumor.completed) return;
   if(game.rumor.camps.every(c=>c.cleared)){
     game.rumor.completed=true;
     queueModal('Die geheimnisvolle Macht ist ergründet. Auch dieser Gerüchtefaden ist zu Ende erzählt.');
+  }
+  checkGameCompleted();
+}
+function checkGameCompleted(){
+  // Das "Missionen abgeschlossen"-Ende darf erst kommen, wenn wirklich ALLE Handlungsstränge
+  // abgeschlossen sind — nicht schon nach dem dritten Versorgungslager.
+  if(game.completed) return;
+  const villagesDone = game.world.villages.every(v=>v.liberated);
+  const campsDone = game.world.camps.every(c=>c.cleared);
+  const castlesDone = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
+  const offensiveDone = game.offensive.camps.every(c=>c.cleared);
+  const rumorDone = game.rumor.camps.every(c=>c.cleared);
+  const fieldCampDone = !game.fieldCamp.unlocked || game.fieldCamp.destroyed;
+  const scoutDone = !game.scoutPatrol.unlocked || game.scoutPatrol.cleared;
+  if(villagesDone && campsDone && castlesDone && offensiveDone && rumorDone && fieldCampDone && scoutDone){
+    game.completed = true;
+    queueModal('Missionen abgeschlossen! Die Grenzmark ist gesichert und der Gegenschlag erfolgreich.', null, 'restart');
   }
 }
 
@@ -763,11 +828,14 @@ function advanceCastleSiege(amount){
   const idx = game.world.activeCastle;
   if(idx>=game.world.castles.length) return;
   const castle = game.world.castles[idx];
-  if(castle.fallen) return; // Durchbruch bereits erfolgt, wartet auf Rückeroberung — Front rückt nicht weiter vor
+  if(castle.fallen) return; // diese Burg wartet schon auf Rückeroberung, hier greift kein weiterer Belagerungsfortschritt
   castle.siege = Math.min(100, castle.siege+amount);
   if(castle.siege>=100){
     castle.fallen=true;
     logMsg(`${castle.name} ist gefallen! Die Belagerung wurde durchbrochen.`);
+    // Die Front rückt trotzdem weiter vor — die nächste Burg gerät unter Beschuss,
+    // auch wenn die gefallene noch nicht zurückerobert wurde.
+    game.world.activeCastle = idx+1;
   }
 }
 function siegeLabel(v){
@@ -820,10 +888,10 @@ function getEnemyGroups(loc){
   }
   if(loc.kind==='camp'){
     // Feste Level je Stützpunkt (nach Index, nicht nach Reihenfolge des Spielers).
-    const campLevels = [ [[4,3],[4,4]], [[10,4]], [[6,4],[6,5]] ];
+    const campLevels = [ [[4,3],[4,4]], [[10,4]], [[6,8],[6,9]] ];
     const groups = campLevels[loc.ref.idx].map(([count,level])=>({count, level, weapons:['AXT']}));
     if(loc.ref.idx===2){
-      groups.push({count:1, level:Math.max(1,getStrongestPartyLevel()), weapons:['AXT'], isLeader:true});
+      groups.push({count:1, level:12, weapons:['AXT'], isLeader:true});
     }
     return groups;
   }
@@ -837,7 +905,7 @@ function getEnemyGroups(loc){
     return [{count:10, level:5, weapons:['SCHWERT','SPEER']}];
   }
   if(loc.kind==='supply'){
-    return [{count:3, level:Math.max(1,getStrongestPartyLevel()-2), weapons:['SCHWERT','AXT','SPEER']}];
+    return [{count:10, level:Math.max(1,Math.round(getAveragePartyLevel()-1)), weapons:['SCHWERT','AXT','SPEER']}];
   }
   if(loc.kind==='rumor'){
     const avg = getAveragePartyLevel();
@@ -1090,7 +1158,8 @@ function attackOnce(attacker, defender, isCounter){
   hitChance = Math.max(5, Math.min(95, hitChance));
   const hit = Math.random()*100 < hitChance;
   playSfx('hit');
-  applyXP(attacker, randInt(5,10));
+  const xpMult = xpMultiplier(attacker, defender);
+  applyXP(attacker, Math.max(1,Math.round(randInt(5,10)*xpMult)));
   if(hit){
     let atkVal = attacker.atk;
     if(isCounter) atkVal = atkVal*0.8;
@@ -1102,7 +1171,7 @@ function attackOnce(attacker, defender, isCounter){
     logMsg(`${attacker.name} trifft ${defender.name} (${dmg} Schaden).${flankNote}`);
     if(defender.hp<=0){
       defender.hp=0; defender.alive=false;
-      applyXP(attacker, randInt(20,40));
+      applyXP(attacker, Math.max(1,Math.round(randInt(20,40)*xpMult)));
       logMsg(`${defender.name} wurde besiegt.`);
       playDeathSfx(defender);
       return {died:true};
@@ -1163,7 +1232,8 @@ function castSpell(mage, target, spellKey){
     let hitChance = 70 + (mage.spd - target.spd) + tri.hit;
     hitChance = Math.max(5, Math.min(95, hitChance));
     playSfx('fireball');
-    applyXP(mage, randInt(5,10));
+    const xpMult = xpMultiplier(mage, target);
+    applyXP(mage, Math.max(1,Math.round(randInt(5,10)*xpMult)));
     if(Math.random()*100 < hitChance){
       let dmg = Math.round(mage.atk) + tri.dmg - target.def - (target.defBuff||0) - terrainDef;
       dmg = Math.max(1, dmg);
@@ -1172,7 +1242,7 @@ function castSpell(mage, target, spellKey){
       logMsg(`${mage.name} trifft ${target.name} mit einem Feuerball (${dmg} Schaden).`);
       if(target.hp<=0){
         target.hp=0; target.alive=false;
-        applyXP(mage, randInt(20,40));
+        applyXP(mage, Math.max(1,Math.round(randInt(20,40)*xpMult)));
         logMsg(`${target.name} wurde besiegt.`);
         playDeathSfx(target);
       }
@@ -1606,7 +1676,7 @@ function endBattle(outcome){
     if(win){
       game.scoutPatrol.cleared = true;
       logMsg('Der feindliche Spähertrupp wurde ausgeschaltet.');
-      queueModal('Der feindliche Spähertrupp wurde ausgeschaltet. Angriffe des Feldlagers auf die Burgen werden seltener.');
+      queueModal('Nachdem der Spähertrupp ausgeschaltet wurde, sinkt das Risiko von Angriffen auf unsere Befestigungsanlagen.');
     } else {
       logMsg('Der Angriff auf den Spähertrupp ist gescheitert.');
     }
@@ -1625,6 +1695,7 @@ function endBattle(outcome){
   checkFieldCampTrigger();
   attemptFieldCampCastleRaid();
   checkPassiveIncome();
+  checkGameCompleted();
   battle=null; screen='world'; pendingLocation=null;
   render();
 }
@@ -1670,7 +1741,7 @@ function attemptFieldCampCastleRaid(){
   if(!game.fieldCamp || !game.fieldCamp.unlocked || game.fieldCamp.destroyed) return;
   const castlesSecure = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
   if(!castlesSecure) return; // eine Burg wird ohnehin schon aktiv bedroht
-  const chance = game.scoutPatrol.cleared ? 0.30 : 0.40;
+  const chance = game.scoutPatrol.cleared ? 0.20 : 0.30; // Basiswert um 10 Prozentpunkte gesenkt
   if(Math.random() < chance){
     const idx = randInt(0, game.world.castles.length-1);
     const castle = game.world.castles[idx];
@@ -1721,6 +1792,7 @@ function render(){
   if(screen==='battle') html += renderBattleScreen();
   if(screen==='shop') html += renderShopScreen();
   if(screen==='camp') html += renderCampScreen();
+  if(screen==='saves') html += renderSavesScreen();
   html += '</div></div>';
   if(screen==='confirm') html += renderConfirmModal();
   if((screen==='world' || screen==='battle') && modalQueue.length) html += renderAnnouncementModal();
@@ -1759,6 +1831,7 @@ function renderHeader(){
       <span class="day-badge">💰 ${game.gold} Gold</span>
       <button data-action="toggle-music">${musicEnabled ? '🎵 Musik an' : '🎵 Musik aus'}</button>
       <button data-action="toggle-sfx">${sfxEnabled ? '🔊 Sound an' : '🔇 Sound aus'}</button>
+      <button data-action="open-saves">💾 Spielstände</button>
       <button data-action="newgame">Neues Spiel</button>
     </div>
   </div>`;
@@ -1870,29 +1943,32 @@ function renderWorldScreen(){
   });
   html += '</div></div>';
 
-  html += '<div class="map-region"><h2>Westliche Dörfer &amp; Banditenland</h2><div class="node-row">';
-  w.villages.forEach((v,i)=>{
-    const state = villageStateLabel(v);
-    if(v.liberated){
-      html += `<div class="node success"><div class="n-name">${v.name}</div><div class="n-state">Befreit</div></div>`;
-    } else {
-      const dangerCls = (v.occupation||0)>=75 ? 'danger' : '';
-      html += `<div class="node clickable ${dangerCls}" data-action="select-loc" data-kind="village" data-idx="${i}">
-        <div class="n-name">${v.name}</div><div class="n-state">${state}</div>
-        <div class="siegebar"><div class="siegebar-inner" style="width:${v.occupation||0}%"></div></div></div>`;
-    }
-  });
-  w.camps.forEach((c,i)=>{
-    if(!c.visible){
-      html += `<div class="node locked"><div class="n-name">???</div><div class="n-state">Unentdeckt</div></div>`;
-    } else if(c.cleared){
-      html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Ausgehoben</div></div>`;
-    } else {
-      html += `<div class="node clickable" data-action="select-loc" data-kind="camp" data-idx="${i}">
-        <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
-    }
-  });
-  html += '</div></div>';
+  const villagesCampsAllDone = w.villages.every(v=>v.liberated) && w.camps.every(c=>c.cleared);
+  if(!villagesCampsAllDone){
+    html += '<div class="map-region"><h2>Westliche Dörfer &amp; Banditenland</h2><div class="node-row">';
+    w.villages.forEach((v,i)=>{
+      const state = villageStateLabel(v);
+      if(v.liberated){
+        html += `<div class="node success"><div class="n-name">${v.name}</div><div class="n-state">Befreit</div></div>`;
+      } else {
+        const dangerCls = (v.occupation||0)>=75 ? 'danger' : '';
+        html += `<div class="node clickable ${dangerCls}" data-action="select-loc" data-kind="village" data-idx="${i}">
+          <div class="n-name">${v.name}</div><div class="n-state">${state}</div>
+          <div class="siegebar"><div class="siegebar-inner" style="width:${v.occupation||0}%"></div></div></div>`;
+      }
+    });
+    w.camps.forEach((c,i)=>{
+      if(!c.visible){
+        html += `<div class="node locked"><div class="n-name">???</div><div class="n-state">Unentdeckt</div></div>`;
+      } else if(c.cleared){
+        html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Ausgehoben</div></div>`;
+      } else {
+        html += `<div class="node clickable" data-action="select-loc" data-kind="camp" data-idx="${i}">
+          <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+      }
+    });
+    html += '</div></div>';
+  }
 
   if(game.offensive.unlocked){
     const nextIdx = game.offensive.camps.findIndex(c=>!c.cleared);
@@ -2007,6 +2083,27 @@ function renderCampScreen(){
       <button data-action="potion-to-pool" data-id="${u.id}" data-potion="manaPotions" ${u.manaPotions<=0?'disabled':''}>− Manatrank</button>
     </div></div>`;
   });
+  html += `<div class="panel-box"><div class="action-row"><button class="primary" data-action="back-to-world">Zurück zur Weltkarte</button></div></div>`;
+  return html;
+}
+
+function renderSavesScreen(){
+  let html = '<div class="map-region"><h2>Spielstände</h2></div>';
+  for(let i=1;i<=SAVE_SLOTS;i++){
+    const info = getSaveSlotInfo(i);
+    html += `<div class="panel-box"><h3>Slot ${i}</h3>`;
+    if(info && info.game){
+      const g = info.game;
+      html += `<div class="help-text">Gespeichert: ${info.savedAt} · Version ${info.version||'?'} · 💰 ${g.gold} Gold · ${g.mercs?g.mercs.length:'?'} Söldner</div>`;
+    } else {
+      html += `<div class="help-text">Leerer Speicherplatz</div>`;
+    }
+    html += `<div class="action-row">
+      <button data-action="save-slot" data-slot="${i}">Hier speichern</button>
+      <button data-action="load-slot" data-slot="${i}" ${info?'':'disabled'}>Laden</button>
+      <button class="danger" data-action="delete-slot" data-slot="${i}" ${info?'':'disabled'}>Löschen</button>
+    </div></div>`;
+  }
   html += `<div class="panel-box"><div class="action-row"><button class="primary" data-action="back-to-world">Zurück zur Weltkarte</button></div></div>`;
   return html;
 }
@@ -2284,6 +2381,16 @@ function attachHandlers(){
       }
       else if(action==='open-shop'){ screen='shop'; render(); }
       else if(action==='open-camp'){ screen='camp'; render(); }
+      else if(action==='open-saves'){ screen='saves'; render(); }
+      else if(action==='save-slot'){ saveGameToSlot(Number(el.getAttribute('data-slot'))); }
+      else if(action==='load-slot'){
+        if(confirm('Diesen Spielstand laden? Der aktuelle, nicht gespeicherte Fortschritt geht dabei verloren.')){
+          loadGameFromSlot(Number(el.getAttribute('data-slot')));
+        }
+      }
+      else if(action==='delete-slot'){
+        if(confirm('Diesen Spielstand wirklich löschen?')) deleteSaveSlot(Number(el.getAttribute('data-slot')));
+      }
       else if(action==='back-to-world'){ screen='world'; render(); }
       else if(action==='buy-potion'){ buyPotion(el.getAttribute('data-potion')); render(); }
       else if(action==='hire-mercenary'){ hireMercenary(); render(); }
