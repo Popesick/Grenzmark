@@ -107,6 +107,12 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 .node .siegebar{height:5px;border-radius:3px;background:#111528;margin-top:8px;overflow:hidden;border:1px solid var(--line-soft);}
 .node .siegebar-inner{height:100%;background:linear-gradient(90deg,var(--success),var(--danger));}
 .capital-node{width:100%;max-width:340px;margin:0 auto;text-align:center;padding:20px;background:radial-gradient(ellipse at center,#26305a,#1a2140);border:1px solid var(--gold-dim);border-radius:6px;}
+.tree-wrap{display:flex;flex-direction:column;align-items:center;}
+.tree-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;position:relative;padding-top:16px;width:100%;}
+.tree-row.multi::before{content:'';position:absolute;top:0;left:12%;right:12%;height:1px;background:var(--line);}
+.tree-row .tree-node{position:relative;}
+.tree-row .tree-node::before{content:'';position:absolute;top:-16px;left:50%;width:1px;height:16px;background:var(--line);transform:translateX(-50%);}
+.tree-connector{width:1px;height:18px;background:var(--line);}
 .capital-node .n-name{font-size:16px;}
 
 /* modal */
@@ -497,8 +503,10 @@ function makeSecondAllyUnit(){
 
 /* ===================== Weltinitialisierung ===================== */
 let game = null;
-let screen = 'intro'; // 'intro' | 'world' | 'confirm' | 'battle'
+let screen = 'intro'; // 'intro' | 'world' | 'confirm' | 'battle' | 'squad'
 let pendingLocation = null;
+let squadPick = null; // { selectedIds:Set } — Trupp-Auswahl, wenn Roster > MAX_SQUAD_SIZE
+const MAX_SQUAD_SIZE = 8;
 let battle = null;
 let modalQueue = []; // Warteschlange für Dialogboxen (neue Kämpfer, Aufträge, Erfolg)
 
@@ -523,7 +531,7 @@ function initGame(){
     mercs,
     excludedMageName: excludedCandidate,
     gold: 0,
-    villageIncomeAnnounced:false, castleIncomeAnnounced:false, completed:false,
+    villageIncomeAnnounced:false, castleIncomeAnnounced:false, completed:false, northFrontResolved:false,
     pool: { healPotions:0, manaPotions:0 },
     shop: {
       weaponTiers: { SCHWERT:{silber:false,elementar:false}, AXT:{silber:false,elementar:false}, SPEER:{silber:false,elementar:false} },
@@ -533,7 +541,7 @@ function initGame(){
     secondAlly:{ unit: makeSecondAllyUnit(), joined:false },
     world:{ villages, camps, castles, activeCastle:0, villageWinCount:0 },
     offensive:{
-      unlocked:false, completed:false,
+      unlocked:false, triggered:false, completed:false,
       camps:[
         {id:'sup0', idx:0, name:'Versorgungslager 1', count:10, level:10, mixed:true,  cleared:false, clearedAtMonth:null},
         {id:'sup1', idx:1, name:'Versorgungslager 2', count:15, level:10, mixed:false, cleared:false, clearedAtMonth:null},
@@ -723,10 +731,13 @@ function checkNextStageTrigger(){
   // Regel: Ist die Belagerung der Burgen aktuell beendet (keine Burg gerade aktiv belagert)
   // UND sind die Banditen im Westen besiegt (alle Dörfer befreit, alle Lager zerstört),
   // werden Gegenschlag, Gerüchte-Questreihe und Feldlager gemeinsam ausgelöst.
-  if(game.offensive.unlocked) return;
+  // "triggered" wird SOFORT gesetzt (nicht erst beim Schließen der Meldung), damit diese
+  // Funktion nicht mehrfach in derselben oder einer folgenden Runde doppelt auslöst.
+  if(game.offensive.unlocked || game.offensive.triggered) return;
   const noActiveSiege = game.world.castles.every(c=>!c.fallen && c.siege===0);
   const banditsDefeated = game.world.villages.every(v=>v.liberated) && game.world.camps.every(c=>c.cleared);
   if(!(noActiveSiege && banditsDefeated)) return;
+  game.offensive.triggered = true;
   const usedNames = new Set(game.mercs.map(m=>m.name));
   usedNames.add(game.excludedMageName);
   const merc = createLeveledMerc(10, usedNames);
@@ -770,7 +781,7 @@ function checkGameCompleted(){
   const offensiveDone = game.offensive.camps.every(c=>c.cleared);
   const rumorDone = game.rumor.camps.every(c=>c.cleared);
   const fieldCampDone = !game.fieldCamp.unlocked || game.fieldCamp.destroyed;
-  const scoutDone = !game.scoutPatrol.unlocked || game.scoutPatrol.cleared;
+  const scoutDone = !game.scoutPatrol.unlocked || game.scoutPatrol.cleared || game.scoutPatrol.expired;
   if(villagesDone && campsDone && castlesDone && offensiveDone && rumorDone && fieldCampDone && scoutDone){
     game.completed = true;
     queueModal('Missionen abgeschlossen! Die Grenzmark ist gesichert und der Gegenschlag erfolgreich.', null, 'restart');
@@ -779,6 +790,7 @@ function checkGameCompleted(){
 
 /* ===================== XP / Level / Beförderung ===================== */
 function applyXP(unit, amount){
+  if(unit.team==='enemy') amount = Math.max(1, Math.round(amount*0.2)); // Gegner erhalten nur 20% EXP
   if(unit.level>=20 && unit.rank!=='Söldner' && unit.rank!=='Verbündeter' && unit.rank!=='Verbündete'){ /* Hauptmann max */ }
   if(unit.level>=20 && unit.promoted){ unit.xp=0; return; }
   unit.xp += amount;
@@ -800,8 +812,11 @@ function levelUp(unit){
   }
   logMsg(`${unit.name} erreicht Level ${unit.level}.`);
   if(unit.level>=20 && !unit.promoted){
-    if(unit.isMage){
+    if(unit.isMage && unit.team==='player'){
       queueModal(`${unit.name} hat Level 20 erreicht. Erzmagier: alle Zauber wirken doppelt so stark, kosten aber dreimal so viel Mana; Feuerball erhält Reichweite 3 und eine Chance auf Feuerschaden. Nekromant: erlernt drei neue dunkle Zauber (Schwächen, Manipulieren, Todesfluch). Wähle den Aufstiegspfad für ${unit.name}.`, null, 'mage-choice', unit);
+    } else if(unit.isMage){
+      // Feindliche Magier wählen nicht selbst — sie werden immer Erzmagier.
+      applyMagePromotionChoice(unit, 'erzmagier');
     } else {
       promote(unit);
     }
@@ -919,7 +934,10 @@ function getEnemyGroups(loc){
     return [{count:10, level:5, weapons:['SCHWERT','SPEER']}];
   }
   if(loc.kind==='supply'){
-    return [{count:10, level:Math.max(1,Math.round(getAveragePartyLevel()-1)), weapons:['SCHWERT','AXT','SPEER']}];
+    return [
+      {count:10, level:Math.max(1,Math.round(getAveragePartyLevel()-1)), weapons:['SCHWERT','AXT','SPEER']},
+      {count:1, level:Math.max(1,getStrongestPartyLevel()), weapons:['SCHWERT'], isCommander:true}
+    ];
   }
   if(loc.kind==='rumor'){
     const avg = getAveragePartyLevel();
@@ -1046,14 +1064,23 @@ function generateBattle(loc){
       placeSpecialCluster(grid,size,rng,[size-3,size-2,size-1],1,5);
     }
   } else if(loc.kind==='feldlager'){
-    // Feste Wachturm-Anordnung: Reihe "x_x_x" direkt gefolgt von "_x_x_".
-    const row1 = Math.min(size-2, 5), row2 = row1+1;
+    // Feste Wachturm-Anordnung in der 3. und 4. Reihe von oben: "x_x_x" direkt gefolgt von "_x_x_".
+    const row1 = 2, row2 = 3;
     const startCol = Math.max(0, Math.floor((size-5)/2));
     [0,2,4].forEach(off=>{ const x=startCol+off; if(x<size){ grid[row1][x]='WACHTURM'; specialTiles.push({x,y:row1,type:'WACHTURM'}); } });
     [1,3].forEach(off=>{ const x=startCol+off; if(x<size){ grid[row2][x]='WACHTURM'; specialTiles.push({x,y:row2,type:'WACHTURM'}); } });
+  } else if(loc.kind==='supply'){
+    // Ein Wachturm für den Lagerkommandanten.
+    const ty = randInt(1,3), tx = randInt(2,size-3);
+    grid[ty][tx]='WACHTURM';
+    specialTiles.push({x:tx,y:ty,type:'WACHTURM'});
   }
 
-  const roster = getActivePlayerRoster();
+  let roster = getActivePlayerRoster();
+  if(squadPick){
+    roster = roster.filter(u=>squadPick.selectedIds.has(u.id));
+    squadPick = null;
+  }
   roster.forEach(u=>{ u.alive=true; u.hp=u.maxHp; u.hasMoved=false; u.hasActed=false; u.team='player'; u.defBuff=0; u.defBuffRounds=0; });
 
   const groups = getEnemyGroups(loc);
@@ -1067,10 +1094,13 @@ function generateBattle(loc){
       const maxHp = Math.floor(rng()*11)+15+bonus*3;
       const isMage = !!g.isMage;
       const maxMag = isMage ? (Math.floor(rng()*9)+11) : 0;
+      const defBonus = g.isCommander ? ARMOR_TIER_BONUS.leder.def : 0; // Lagerkommandant trägt Lederrüstung
       enemies.push({
-        id:'e'+counter, name: g.isLeader ? 'Bandenanführer' : (isMage ? 'Kampfmagier '+(counter+1) : enemySingular(loc)+' '+(counter+1)),
-        team:'enemy', isAlly:false, isMage, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level, rank: g.isLeader ? 'Anführer' : (isMage?'Magier':'Gegner'),
-        atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus, spd:Math.floor(rng()*10)+1+bonus, mag:maxMag, maxMag,
+        id:'e'+counter, name: g.isLeader ? 'Bandenanführer' : (g.isCommander ? 'Lagerkommandant' : (isMage ? 'Kampfmagier '+(counter+1) : enemySingular(loc)+' '+(counter+1))),
+        team:'enemy', isAlly:false, isMage, isCommander:!!g.isCommander, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level,
+        rank: g.isLeader ? 'Anführer' : (g.isCommander ? 'Lagerkommandant' : (isMage?'Magier':'Gegner')),
+        armorTier: g.isCommander ? 'leder' : undefined,
+        atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus+defBonus, spd:Math.floor(rng()*10)+1+bonus, mag:maxMag, maxMag,
         maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
       });
       counter++;
@@ -1092,6 +1122,14 @@ function generateBattle(loc){
     const mageSpawns = findSpawnTiles([1], mages.length);
     mages.forEach((e,i)=>{ const s=mageSpawns[i]||[i%size,1]; e.x=s[0]; e.y=s[1]; });
     const otherSpawns = findSpawnTiles([0,2], others.length);
+    others.forEach((e,i)=>{ const s=otherSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
+  } else if(loc.kind==='supply'){
+    // Der Lagerkommandant steht immer auf dem Wachturm.
+    const commander = enemies.find(e=>e.isCommander);
+    const others = enemies.filter(e=>!e.isCommander);
+    const tower = specialTiles.find(t=>t.type==='WACHTURM');
+    if(commander && tower){ commander.x=tower.x; commander.y=tower.y; }
+    const otherSpawns = findSpawnTiles([0,1,2], others.length);
     others.forEach((e,i)=>{ const s=otherSpawns[i]||[i%size,0]; e.x=s[0]; e.y=s[1]; });
   } else {
     const eSpawns = findSpawnTiles([0,1,2], enemies.length);
@@ -1340,7 +1378,7 @@ function castSpell(mage, target, spellKey){
   }
   mage.hasActed = true;
   battle.selected=null; battle.attackRange=null; battle.moveRange=null; battle.castingSpell=null; battle.mode='idle';
-  render();
+  if(!checkAllActedAutoEnd()) render();
 }
 
 /* Spieler-Interaktion */
@@ -1397,7 +1435,7 @@ function moveSelectedTo(x,y){
     u.hasActed=true;
     battle.selected=null; battle.attackRange=null; battle.mode='idle';
   }
-  render();
+  if(!checkAllActedAutoEnd()) render();
 }
 function attackFromCurrentPosition(target){
   // Angriff ohne vorherige Bewegung, direkt aus der aktuellen Position heraus.
@@ -1407,19 +1445,19 @@ function attackFromCurrentPosition(target){
   resolveCombat(u, target);
   if(u.alive) u.hasActed=true;
   if(!battle.outcome){ battle.selected=null; battle.attackRange=null; battle.mode='idle'; }
-  render();
+  if(!checkAllActedAutoEnd()) render();
 }
 function performPlayerAttack(target){
   const u=battle.selected;
   resolveCombat(u,target);
   if(u.alive) u.hasActed=true;
   if(!battle.outcome){ battle.selected=null; battle.attackRange=null; battle.mode='idle'; }
-  render();
+  if(!checkAllActedAutoEnd()) render();
 }
 function waitAction(){
   if(battle.selected) battle.selected.hasActed=true;
   battle.selected=null; battle.attackRange=null; battle.mode='idle';
-  render();
+  if(!checkAllActedAutoEnd()) render();
 }
 function usePotionInBattle(kind){
   const u = battle.selected;
@@ -1436,7 +1474,19 @@ function usePotionInBattle(kind){
   }
   u.hasActed = true;
   battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
-  render();
+  if(!checkAllActedAutoEnd()) render();
+}
+function canRest(u){
+  return !!u && !u.hasMoved && !u.hasActed && adjacentOpponents(u).length===0;
+}
+function restAction(){
+  const u = battle.selected;
+  if(!canRest(u)) return;
+  u.resting = true;
+  u.hasActed = true; u.hasMoved = true;
+  logMsg(`${u.name} rastet.`);
+  battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
+  if(!checkAllActedAutoEnd()) render();
 }
 function startCastingSpell(spellKey){
   const mage = battle.selected;
@@ -1469,7 +1519,7 @@ function abortMageTurn(){
   battle.castingSpell = null;
   if(u) u.hasActed = true;
   battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
-  render();
+  if(!checkAllActedAutoEnd()) render();
 }
 function handleDeployClick(x,y){
   const inZone = y >= battle.size-2;
@@ -1702,9 +1752,37 @@ function regenMana(){
     if(u.isMage && u.alive) u.mag = Math.min(u.maxMag, u.mag+1);
   });
 }
+function applyResting(){
+  battle.units.forEach(u=>{
+    if(u.resting && u.alive){
+      const tile = battle.grid[u.y][u.x];
+      const hpGain = tile==='WACHTURM' ? 3 : 1;
+      const before = u.hp;
+      u.hp = Math.min(u.maxHp, u.hp+hpGain);
+      if(u.hp>before) logMsg(`${u.name} rastet und erholt sich (+${u.hp-before} HP).`);
+      if(u.isMage){
+        const mpGain = (tile==='DORF'||tile==='BURG'||tile==='WACHTURM') ? 3 : 2;
+        const beforeMp = u.mag;
+        u.mag = Math.min(u.maxMag, u.mag+mpGain);
+        if(u.mag>beforeMp) logMsg(`${u.name} sammelt Mana (+${u.mag-beforeMp} MP).`);
+      }
+    }
+    u.resting = false;
+  });
+}
+function checkAllActedAutoEnd(){
+  if(!battle || battle.deploying || battle.outcome || battle.phase!=='player') return false;
+  const players = battle.units.filter(u=>u.team==='player' && u.alive);
+  if(players.length && players.every(u=>u.hasActed)){
+    endPlayerPhase();
+    return true;
+  }
+  return false;
+}
 function finishEnemyPhase(){
   battle.units.forEach(u=>{ u.hasMoved=false; u.hasActed=false; });
   applyTileHealing();
+  applyResting();
   tickBuffs();
   regenMana();
   battle.phase='player'; battle.mode='idle'; battle.turnNumber++; battle.enemyIdx=0;
@@ -1815,10 +1893,26 @@ function endBattle(outcome){
   reactivateSupplyCamps();
   checkNextStageTrigger();
   attemptFieldCampCastleRaid();
+  checkNorthFrontResolved();
   checkPassiveIncome();
   checkGameCompleted();
   battle=null; screen='world'; pendingLocation=null;
   render();
+}
+function checkNorthFrontResolved(){
+  // Sind Feldlager und alle Versorgungslager erledigt, erlischt eine noch offene Spähermission
+  // (nicht als Erfolg, sie wird einfach gegenstandslos), und die Nordfront-Missionseinträge
+  // (Burgen, Feldlager, Versorgungslager, Spähertrupp) verschwinden von der Weltkarte.
+  if(game.northFrontResolved) return;
+  const offensiveDone = game.offensive.camps.every(c=>c.cleared);
+  const fieldCampDone = game.fieldCamp.destroyed;
+  if(!(offensiveDone && fieldCampDone)) return;
+  game.northFrontResolved = true;
+  if(game.scoutPatrol.unlocked && !game.scoutPatrol.cleared){
+    game.scoutPatrol.expired = true;
+    logMsg('Mit Feldlager und Versorgungslagern verliert der Spähertrupp seine Bedeutung — die Mission entfällt.');
+    queueModal('Mit der Zerstörung von Feldlager und Versorgungslagern verliert der Spähertrupp seine Bedeutung. Die Mission entfällt.');
+  }
 }
 function advanceVillageOccupation(){
   // Dörfer, die nicht befreit sind, werden zunehmend von Banditen übernommen — außer alle Lager sind zerstört.
@@ -1932,6 +2026,7 @@ function render(){
   if(screen==='shop') html += renderShopScreen();
   if(screen==='camp') html += renderCampScreen();
   if(screen==='saves') html += renderSavesScreen();
+  if(screen==='squad') html += renderSquadScreen();
   html += '</div></div>';
   if(screen==='confirm') html += renderConfirmModal();
   if((screen==='world' || screen==='battle') && modalQueue.length) html += renderAnnouncementModal();
@@ -2068,24 +2163,30 @@ function renderWorldScreen(){
     + '<div class="action-row" style="justify-content:center;margin-top:12px;"><button data-action="open-shop">Shop besuchen</button><button data-action="open-camp">Camp</button></div>'
     + '</div></div>';
 
-  html += '<div class="map-region"><h2>Nordgrenze <span class="hint">Burgen werden nacheinander belagert</span></h2><div class="node-row">';
-  w.castles.forEach((c,i)=>{
-    if(c.fallen){
-      html += `<div class="node clickable danger" data-action="select-loc" data-kind="castle" data-idx="${i}">
-        <div class="n-name">${c.name}</div><div class="n-state">Gefallen — zurückerobern?</div></div>`;
-    } else if(i===w.activeCastle){
-      html += `<div class="node clickable" data-action="select-loc" data-kind="castle" data-idx="${i}">
-        <div class="n-name">${c.name}</div>
-        <div class="n-state">${siegeLabel(c.siege)}</div>
-        <div class="siegebar"><div class="siegebar-inner" style="width:${c.siege}%"></div></div>
-      </div>`;
-    } else if(i<w.activeCastle){
-      html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Gesichert</div></div>`;
+  if(!game.northFrontResolved){
+    if(game.offensive.unlocked){
+      html += renderDependencyTree();
     } else {
-      html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht bedroht</div></div>`;
+      html += '<div class="map-region"><h2>Nordgrenze <span class="hint">Burgen werden nacheinander belagert</span></h2><div class="node-row">';
+      w.castles.forEach((c,i)=>{
+        if(c.fallen){
+          html += `<div class="node clickable danger" data-action="select-loc" data-kind="castle" data-idx="${i}">
+            <div class="n-name">${c.name}</div><div class="n-state">Gefallen — zurückerobern?</div></div>`;
+        } else if(i===w.activeCastle){
+          html += `<div class="node clickable" data-action="select-loc" data-kind="castle" data-idx="${i}">
+            <div class="n-name">${c.name}</div>
+            <div class="n-state">${siegeLabel(c.siege)}</div>
+            <div class="siegebar"><div class="siegebar-inner" style="width:${c.siege}%"></div></div>
+          </div>`;
+        } else if(i<w.activeCastle){
+          html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Gesichert</div></div>`;
+        } else {
+          html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht bedroht</div></div>`;
+        }
+      });
+      html += '</div></div>';
     }
-  });
-  html += '</div></div>';
+  }
 
   const villagesCampsAllDone = w.villages.every(v=>v.liberated) && w.camps.every(c=>c.cleared);
   if(!villagesCampsAllDone){
@@ -2114,21 +2215,6 @@ function renderWorldScreen(){
     html += '</div></div>';
   }
 
-  if(game.offensive.unlocked){
-    const nextIdx = game.offensive.camps.findIndex(c=>!c.cleared);
-    html += '<div class="map-region"><h2>Feindliches Territorium <span class="hint">Versorgungslager werden nacheinander ausgehoben</span></h2><div class="node-row">';
-    game.offensive.camps.forEach((c,i)=>{
-      if(c.cleared){
-        html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Ausgehoben</div></div>`;
-      } else if(i===nextIdx){
-        html += `<div class="node clickable" data-action="select-loc" data-kind="supply" data-idx="${i}">
-          <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
-      } else {
-        html += `<div class="node locked"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht erreichbar</div></div>`;
-      }
-    });
-    html += '</div></div>';
-  }
   if(game.rumor && game.rumor.unlocked){
     const nextIdx = game.rumor.camps.findIndex(c=>!c.cleared);
     html += '<div class="map-region"><h2>Gerüchte aus dem Süden <span class="hint">Geheimnisvolle Macht</span></h2><div class="node-row">';
@@ -2144,22 +2230,48 @@ function renderWorldScreen(){
     });
     html += '</div></div>';
   }
-  if(game.fieldCamp && game.fieldCamp.unlocked){
-    html += '<div class="map-region"><h2>Feindliches Feldlager <span class="hint">solange aktiv, drohen erneute Burgangriffe</span></h2><div class="node-row">';
-    if(game.fieldCamp.destroyed){
-      html += `<div class="node success"><div class="n-name">Feldlager</div><div class="n-state">Zerstört</div></div>`;
-    } else {
-      html += `<div class="node clickable danger" data-action="select-loc" data-kind="feldlager" data-idx="0">
-        <div class="n-name">Feldlager</div><div class="n-state">Einsatzort verfügbar</div></div>`;
-    }
-    if(game.scoutPatrol.cleared){
-      html += `<div class="node success"><div class="n-name">Spähertrupp</div><div class="n-state">Ausgeschaltet</div></div>`;
-    } else {
-      html += `<div class="node clickable" data-action="select-loc" data-kind="spaeher" data-idx="0">
-        <div class="n-name">Spähertrupp</div><div class="n-state">Einsatzort verfügbar</div></div>`;
-    }
+  return html;
+}
+
+function renderDependencyTree(){
+  const w = game.world;
+  let html = '<div class="map-region"><h2>Feindliche Nordfront</h2><div class="tree-wrap">';
+
+  const nextSupIdx = game.offensive.camps.findIndex(c=>!c.cleared);
+  html += '<div class="tree-row multi">';
+  game.offensive.camps.forEach((c,i)=>{
+    if(c.cleared) html += `<div class="node success tree-node"><div class="n-name">${c.name}</div><div class="n-state">Ausgehoben</div></div>`;
+    else if(i===nextSupIdx) html += `<div class="node clickable tree-node" data-action="select-loc" data-kind="supply" data-idx="${i}"><div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+    else html += `<div class="node locked tree-node"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht erreichbar</div></div>`;
+  });
+  html += '</div><div class="tree-connector"></div>';
+
+  html += '<div class="tree-row">';
+  if(game.fieldCamp.destroyed) html += `<div class="node success tree-node"><div class="n-name">Feldlager</div><div class="n-state">Zerstört</div></div>`;
+  else html += `<div class="node clickable danger tree-node" data-action="select-loc" data-kind="feldlager" data-idx="0"><div class="n-name">Feldlager</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+  html += '</div><div class="tree-connector"></div>';
+
+  html += '<div class="tree-row multi">';
+  w.castles.forEach((c,i)=>{
+    if(c.fallen) html += `<div class="node clickable danger tree-node" data-action="select-loc" data-kind="castle" data-idx="${i}"><div class="n-name">${c.name}</div><div class="n-state">Gefallen — zurückerobern?</div></div>`;
+    else if(i===w.activeCastle) html += `<div class="node clickable tree-node" data-action="select-loc" data-kind="castle" data-idx="${i}"><div class="n-name">${c.name}</div><div class="n-state">${siegeLabel(c.siege)}</div><div class="siegebar"><div class="siegebar-inner" style="width:${c.siege}%"></div></div></div>`;
+    else if(i<w.activeCastle) html += `<div class="node success tree-node"><div class="n-name">${c.name}</div><div class="n-state">Gesichert</div></div>`;
+    else html += `<div class="node locked tree-node"><div class="n-name">${c.name}</div><div class="n-state">Noch nicht bedroht</div></div>`;
+  });
+  html += '</div>';
+
+  html += '</div></div>';
+
+  if(game.scoutPatrol.cleared){
+    html += '<div class="map-region"><h2>Spähertrupp</h2><div class="node-row">';
+    html += `<div class="node success"><div class="n-name">Spähertrupp</div><div class="n-state">Ausgeschaltet</div></div>`;
+    html += '</div></div>';
+  } else if(game.scoutPatrol.unlocked && !game.scoutPatrol.expired){
+    html += '<div class="map-region"><h2>Spähertrupp</h2><div class="node-row">';
+    html += `<div class="node clickable" data-action="select-loc" data-kind="spaeher" data-idx="0"><div class="n-name">Spähertrupp</div><div class="n-state">Einsatzort verfügbar</div></div>`;
     html += '</div></div>';
   }
+
   return html;
 }
 
@@ -2168,9 +2280,13 @@ function renderShopScreen(){
 
   const price = mercenaryPrice();
   const weakest = getWeakestPartyUnit();
-  html += `<div class="panel-box"><h3>Söldner anwerben</h3><div class="action-row">
-    <button data-action="hire-mercenary" ${game.gold<price?'disabled':''}>Söldner anwerben (${price} Gold)</button>
-  </div><div class="help-text">Der Level des Kaufsöldners entspricht dem schwächsten Charakter der Party${weakest?' (aktuell Level '+weakest.level+(weakest.promoted?', befördert':'')+')':''}. Ab Level 20 (nach Beförderung) steigt der Preis auf 3000 Gold.</div></div>`;
+  const usedNames = new Set(game.mercs.map(m=>m.name));
+  usedNames.add(game.excludedMageName);
+  if(usedNames.size < MERC_NAMES.length){
+    html += `<div class="panel-box"><h3>Söldner anwerben</h3><div class="action-row">
+      <button data-action="hire-mercenary" ${game.gold<price?'disabled':''}>Söldner anwerben (${price} Gold)</button>
+    </div><div class="help-text">Der Level des Kaufsöldners entspricht dem schwächsten Charakter der Party${weakest?' (aktuell Level '+weakest.level+(weakest.promoted?', befördert':'')+')':''}. Ab Level 20 (nach Beförderung) steigt der Preis auf 3000 Gold.</div></div>`;
+  }
 
   html += `<div class="panel-box"><h3>Tränke</h3><div class="action-row">
     <button data-action="buy-potion" data-potion="healPotions" ${game.gold<POTION_PRICE?'disabled':''}>Heiltrank +5 HP kaufen (${POTION_PRICE} Gold)</button>
@@ -2228,6 +2344,25 @@ function renderCampScreen(){
     </div></div>`;
   });
   html += `<div class="panel-box"><div class="action-row"><button class="primary" data-action="back-to-world">Zurück zur Weltkarte</button></div></div>`;
+  return html;
+}
+
+function renderSquadScreen(){
+  const roster = getActivePlayerRoster();
+  const n = squadPick ? squadPick.selectedIds.size : 0;
+  let html = `<div class="map-region"><h2>Trupp auswählen <span class="hint">${n}/${MAX_SQUAD_SIZE} ausgewählt — maximal ${MAX_SQUAD_SIZE} Söldner pro Schlacht</span></h2></div>`;
+  html += '<div class="node-row" style="align-items:stretch;">';
+  roster.forEach(u=>{
+    const selected = squadPick && squadPick.selectedIds.has(u.id);
+    html += `<div style="width:260px;">${unitCardHtml(u)}
+      <button data-action="toggle-squad" data-id="${u.id}" style="width:100%;margin-top:-4px;" ${selected?'class="primary"':''}>${selected?'✓ Im Kampf':'Nicht dabei'}</button>
+    </div>`;
+  });
+  html += '</div>';
+  html += `<div class="panel-box"><div class="action-row">
+    <button class="primary" data-action="confirm-squad" ${n===MAX_SQUAD_SIZE?'':'disabled'}>Kampf beginnen</button>
+    <button data-action="cancel-loc">Abbrechen</button>
+  </div></div>`;
   return html;
 }
 
@@ -2340,6 +2475,7 @@ function renderBattleScreen(){
   // 1) Aktionen
   html += `<div class="panel-box"><h3>Aktionen</h3><div class="action-row">
     <button data-action="wait" ${battle.mode==='attacking'?'':'disabled'}>Warten</button>
+    <button data-action="rest" ${canRest(battle.selected)?'':'disabled'}>Rasten</button>
     <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
     <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>`;
   if(battle.selected && battle.selected.team==='player' && !battle.selected.hasActed){
@@ -2564,18 +2700,47 @@ function attachHandlers(){
       else if(action==='equip-armor'){ const u=findUnitById(el.getAttribute('data-id')); if(u) setArmorTier(u, el.getAttribute('data-tier')); render(); }
       else if(action==='potion-to-unit'){ const u=findUnitById(el.getAttribute('data-id')); if(u) movePotionToUnit(u, el.getAttribute('data-potion')); render(); }
       else if(action==='potion-to-pool'){ const u=findUnitById(el.getAttribute('data-id')); if(u) movePotionToPool(u, el.getAttribute('data-potion')); render(); }
-      else if(action==='cancel-loc'){ pendingLocation=null; screen='world'; render(); }
+      else if(action==='cancel-loc'){ pendingLocation=null; squadPick=null; screen='world'; render(); }
       else if(action==='confirm-loc'){
         // Roderick schließt sich wieder an, sobald man sich erneut den Banditen zuwendet —
         // er soll direkt in diesem Kampf schon mitkämpfen, nicht erst danach.
         if(pendingLocation.kind==='village' || pendingLocation.kind==='camp'){
           rejoinFirstAllyBeforeBattle();
         }
-        generateBattle(pendingLocation); screen='battle'; render();
+        const roster = getActivePlayerRoster();
+        if(roster.length > MAX_SQUAD_SIZE){
+          squadPick = { selectedIds: new Set(roster.slice(0, MAX_SQUAD_SIZE).map(u=>u.id)) };
+          screen='squad';
+        } else {
+          generateBattle(pendingLocation); screen='battle';
+        }
+        render();
+      }
+      else if(action==='toggle-squad'){
+        const uid = el.getAttribute('data-id');
+        if(squadPick){
+          if(squadPick.selectedIds.has(uid)){
+            squadPick.selectedIds.delete(uid);
+          } else if(squadPick.selectedIds.size < MAX_SQUAD_SIZE){
+            squadPick.selectedIds.add(uid);
+          }
+        }
+        render();
+      }
+      else if(action==='confirm-squad'){
+        if(squadPick && squadPick.selectedIds.size===MAX_SQUAD_SIZE){
+          generateBattle(pendingLocation); screen='battle'; render();
+        }
       }
       else if(action==='wait'){ waitAction(); }
+      else if(action==='rest'){ restAction(); }
       else if(action==='use-potion'){ usePotionInBattle(el.getAttribute('data-potion')); }
-      else if(action==='end-phase'){ endPlayerPhase(); }
+      else if(action==='end-phase'){
+        const allActed = battle.units.filter(u=>u.team==='player' && u.alive).every(u=>u.hasActed);
+        if(allActed || confirm('Achtung, es wurden noch nicht alle Einheiten bewegt. Willst du wirklich die aktuelle Phase beenden?')){
+          endPlayerPhase();
+        }
+      }
       else if(action==='retreat'){ if(confirm('Wirklich zurückziehen? Dies zählt als Niederlage für die Weltkonsequenzen.')) retreatBattle(); }
       else if(action==='confirm-deploy'){ confirmDeployment(); }
       else if(action==='cast-spell'){ startCastingSpell(el.getAttribute('data-spell')); }
