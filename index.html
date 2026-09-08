@@ -333,7 +333,7 @@ function toggleTutorial(){ showTutorial = !showTutorial; render(); }
 let showBattleScreenOverlay = true; // Konfrontations-Fenster bei Nahkampfangriffen des Spielers
 function toggleBattleScreenOverlay(){ showBattleScreenOverlay = !showBattleScreenOverlay; render(); }
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
-const GAME_VERSION = '0.3.4'; // Konfrontations-Kampfscreen, Camp-/Inventar-Feinschliff
+const GAME_VERSION = '0.4.0'; // Akt 3: Feldzug gegen die Grafschaft Demeron (Isara, Grenzburg, Trio, Belagerungsdruck, Düsterkuppel, Kopf der Schlange)
 const MONTH_NAMES = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
 function formatDate(monthIndex){
   const total = 9 + monthIndex; // Start: Oktober (Index 9) 503
@@ -607,6 +607,38 @@ function initGame(){
     },
     fieldCamp:{ id:'feldlager', name:'Feindliches Feldlager', unlocked:false, destroyed:false, raidTargetIdx:null },
     scoutPatrol:{ id:'spaeher', name:'Spähertrupp', unlocked:false, cleared:false },
+    act3: {
+      unlocked:false, isaraJoined:false, finalAnnounced:false,
+      grenzburg:{ id:'grenzburg', name:'Grenzburg', unlocked:false, cleared:false },
+      trio:{
+        unlocked:false, completed:false,
+        city:{   id:'demeron-stadt', name:'Versorgungsstadt', cleared:false },
+        castle:{ id:'demeron-burg',  name:'Grafenburg',       cleared:false },
+        forest:{ id:'demeron-wald',  name:'Geheimnisvoller Wald', cleared:false }
+      },
+      pressure:{
+        unlocked:false, completed:false,
+        castles:[
+          { id:'ost-burg-0', idx:0, name:'Ostburg 1', cityName:'Marrensdorf', cleared:false, cityCleared:false, capturedAtMonth:null },
+          { id:'ost-burg-1', idx:1, name:'Ostburg 2', cityName:'Kellwehr',    cleared:false, cityCleared:false, capturedAtMonth:null },
+          { id:'ost-burg-2', idx:2, name:'Ostburg 3', cityName:'Aldenfurt',   cleared:false, cityCleared:false, capturedAtMonth:null }
+        ],
+        generalOfferUnlocked:false,
+        duesterkuppel:{ unlocked:false, expiresMonth:null, resolved:false, dealAccepted:false }
+      },
+      headOfSnake:{
+        unlocked:false, completed:false,
+        dealAccepted:false, // wurde das Generalsangebot auf der Düsterkuppel angenommen?
+        monthlyIncome:0,
+        capitalCleared:false,
+        supportCastles:[
+          { id:'kap-burg-0', idx:0, name:'Hauptstadt-Burg 1', cleared:false },
+          { id:'kap-burg-1', idx:1, name:'Hauptstadt-Burg 2', cleared:false },
+          { id:'kap-burg-2', idx:2, name:'Hauptstadt-Burg 3', cleared:false }
+        ],
+        sonArmyCleared:false
+      }
+    },
     log:[]
   };
   modalQueue.length = 0;
@@ -622,6 +654,12 @@ function logMsg(text){
 function queueModal(text, onClose, action, unit){
   const wasEmpty = modalQueue.length===0;
   modalQueue.push({text, onClose: onClose||null, action: action||'dismiss', unit: unit||null});
+  if(wasEmpty) playSfx('ping');
+}
+function queueStoryChoice(text, title, optionA, optionB){
+  // optionA/optionB: {label, callback}
+  const wasEmpty = modalQueue.length===0;
+  modalQueue.push({ text, title, action:'story-choice', optionA, optionB, unit:null });
   if(wasEmpty) playSfx('ping');
 }
 
@@ -813,6 +851,21 @@ function createLeveledMerc(level, usedNames){
     ...baseEquipFields()
   };
 }
+function createLeveledMageMerc(id, name, gender, level, promoted, magePath){
+  const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
+  const bonus = level-1;
+  const maxHp = randInt(15,25)+bonus*3;
+  const maxMag = randInt(11,19)+bonus*2;
+  return {
+    id, name, gender, team:'player', isAlly:false, isMage:true,
+    weapon, level, rank: promoted ? (magePath==='erzmagier'?'Erzmagier':'Nekromant') : 'Magier',
+    promoted: !!promoted, magePath: promoted ? magePath : undefined,
+    atk:randInt(1,10)+bonus, def:randInt(1,10)+bonus, spd:randInt(1,10)+bonus, mag:maxMag, maxMag,
+    maxHp, hp:maxHp, xp:0,
+    x:0,y:0, alive:true, hasMoved:false, hasActed:false,
+    ...baseEquipFields()
+  };
+}
 function checkNextStageTrigger(){
   // Regel: Ist die Belagerung der Burgen aktuell beendet (keine Burg gerade aktiv belagert)
   // UND sind die Banditen im Westen besiegt (alle Dörfer befreit, alle Lager zerstört),
@@ -858,8 +911,8 @@ function checkRumorCompleted(){
   checkGameCompleted();
 }
 function checkGameCompleted(){
-  // Das "Missionen abgeschlossen"-Ende darf erst kommen, wenn wirklich ALLE Handlungsstränge
-  // abgeschlossen sind — nicht schon nach dem dritten Versorgungslager.
+  // Das alte "Missionen abgeschlossen"-Ende ist jetzt der Übergang in Akt 3
+  // (Feldzug gegen die Grafschaft Demeron), kein echtes Spielende mehr.
   if(game.completed) return;
   const villagesDone = game.world.villages.every(v=>v.liberated);
   const campsDone = game.world.camps.every(c=>c.cleared);
@@ -870,8 +923,186 @@ function checkGameCompleted(){
   const scoutDone = !game.scoutPatrol.unlocked || game.scoutPatrol.cleared || game.scoutPatrol.expired;
   if(villagesDone && campsDone && castlesDone && offensiveDone && rumorDone && fieldCampDone && scoutDone){
     game.completed = true;
-    queueModal('Missionen abgeschlossen! Die Grenzmark ist gesichert und der Gegenschlag erfolgreich.', null, 'restart');
+    unlockAct3();
   }
+  if(game.act3.headOfSnake.completed && !game.act3.finalAnnounced){
+    game.act3.finalAnnounced = true;
+    queueModal('Die Grafschaft Demeron ist entschieden. Euer Feldzug im Herzen des feindlichen Reichs ist zu Ende erzählt.', null, 'restart');
+  }
+}
+function unlockAct3(){
+  if(game.act3.unlocked) return;
+  game.act3.unlocked = true;
+  game.act3.grenzburg.unlocked = true;
+  queueModal('Unsere Grenzen in der Grenzmark sind wieder sicher. Jetzt wird es Zeit, den Krieg in das Herz unseres Feindes zu tragen. Deine Söldner werden die Grafschaft Demeron angreifen und vom Rest des feindlichen Reichs separieren. Danach werdet ihr die Hauptstadt des Feindes einnehmen. Welche Mittel ihr dabei einsetzt, bleibt euch überlassen. Ich werde euch dafür reichlich belohnen. Außerdem überlasse ich euch meine geliebte Magierin.');
+  recruitIsara();
+}
+function recruitIsara(){
+  if(game.act3.isaraJoined) return;
+  game.act3.isaraJoined = true;
+  const jEff = effectiveLevel(game.mercs.find(m=>m.isMage) || {level:1,promoted:false});
+  const herEff = Math.max(1, jEff-3);
+  const promoted = herEff>20;
+  const level = promoted ? Math.max(1, herEff-20) : herEff;
+  const joric = game.mercs.find(m=>m.isMage);
+  const magePath = (joric && joric.magePath==='erzmagier') ? 'nekromant' : 'erzmagier';
+  const isara = createLeveledMageMerc('isara', 'Isara', 'w', level, promoted, magePath);
+  game.mercs.push(isara);
+  logMsg(`Isara schließt sich als Magierin der Truppe an (Level ${level}${promoted?', '+isara.rank:''}).`);
+  queueModal(`Isara, die Magierin des Königs, schließt sich eurer Truppe an. Sie ist ${promoted ? 'bereits '+isara.rank : 'noch keine Erzmagierin, aber mächtig'} und wird euch auf dem Feldzug gegen Demeron begleiten.`, null, 'dismiss', isara);
+}
+function checkTrioCompleted(){
+  const trio = game.act3.trio;
+  if(trio.completed) return;
+  if(trio.city.cleared && trio.castle.cleared && trio.forest.cleared){
+    trio.completed = true;
+    game.act3.pressure.unlocked = true;
+    queueModal('Versorgungsstadt, Grafenburg und der geheimnisvolle Wald sind unter eurer Kontrolle. Die Grafschaft Demeron gerät zunehmend unter Druck — drei Grenzburgen im Osten müssen noch fallen, um sie endgültig vom feindlichen Reich abzuschneiden.');
+  }
+}
+function checkPressureProgress(){
+  const p = game.act3.pressure;
+  if(p.completed) return;
+  const clearedCount = p.castles.filter(c=>c.cleared).length;
+  if(clearedCount>=2 && !p.generalOfferUnlocked && !p.duesterkuppel.resolved){
+    p.generalOfferUnlocked = true;
+    p.duesterkuppel.unlocked = true;
+    p.duesterkuppel.expiresMonth = game.month + 1;
+    logMsg('Ein Bote erreicht euer Lager mit einem ungewöhnlichen Angebot.');
+    queueModal('Ein Bote tritt aus dem Schatten: „Herr, mein General hat ein Angebot für euch, das ihr nicht ablehnen könnt. Trefft euch mit ihm auf der Düsterkuppel. Er erwartet euch dort.“');
+  }
+  const allCastlesDone = p.castles.every(c=>c.cleared);
+  const allCitiesDone = p.castles.every(c=>c.cityCleared);
+  if(allCastlesDone && (p.duesterkuppel.dealAccepted || allCitiesDone)){
+    p.completed = true;
+    unlockHeadOfSnake();
+  }
+}
+function checkCastleRecapture(){
+  // Wird die zugehörige Stadt nicht eingenommen, erobert sie ihre Burg nach 3 Runden zurück.
+  const p = game.act3.pressure;
+  if(!p.unlocked) return;
+  p.castles.forEach(c=>{
+    if(c.cleared && !c.cityCleared && c.capturedAtMonth!=null && (game.month - c.capturedAtMonth)>=3){
+      c.cleared = false;
+      c.capturedAtMonth = null;
+      logMsg(`${c.cityName} hat ${c.name} zurückerobert.`);
+      queueModal(`${c.cityName} hat ${c.name} zurückerobert, solange die Stadt selbst nicht eingenommen wurde.`);
+    }
+  });
+}
+function checkDuesterkuppelExpiry(){
+  const d = game.act3.pressure.duesterkuppel;
+  if(!d.unlocked || d.resolved) return;
+  if(game.month > d.expiresMonth){
+    d.unlocked = false;
+    d.resolved = true;
+    logMsg('Die Frist für das Treffen auf der Düsterkuppel ist verstrichen. Der General wartet nicht länger.');
+    queueModal('Die Frist für das Treffen auf der Düsterkuppel ist verstrichen. Der General wartet nicht länger.');
+  }
+}
+function engageDuesterkuppel(){
+  const d = game.act3.pressure.duesterkuppel;
+  if(!d.unlocked || d.resolved) return;
+  d.unlocked = false;
+  queueModal('Auf der Düsterkuppel ist ein riesiges Feldlager. Als ihr dort ankommt, reitet euch der General mit einer weißen Fahne entgegen. Ihr sattelt euer Pferd und reitet ihm entgegen. „Großer Joric. Wir haben von euren Taten gehört und wollen unsere Grafschaft nicht in Flammen aufgehen sehen. Wenn ihr mir versprecht den Grafen zu töten und mich als Statthalter einzusetzen, werden sich meine Truppen euch ergeben und euren Feldzug so erleichtern!“',
+    ()=>{
+      queueStoryChoice('Wollt ihr auf das Angebot des Generals eingehen?', 'Das Angebot des Generals',
+        { label:'Angebot annehmen', callback: ()=> resolveGeneralDeal(true) },
+        { label:'Angebot ablehnen', callback: ()=> resolveGeneralDeal(false) }
+      );
+    }
+  );
+  render();
+}
+function resolveGeneralDeal(accepted){
+  const p = game.act3.pressure;
+  p.duesterkuppel.resolved = true;
+  p.duesterkuppel.dealAccepted = accepted;
+  game.act3.headOfSnake.dealAccepted = accepted;
+  if(accepted){
+    const remaining = p.castles.find(c=>!c.cleared);
+    if(remaining){ remaining.cleared=true; remaining.capturedAtMonth=game.month; }
+    logMsg('Der General hält sein Wort — die letzte Burg fällt kampflos.');
+    checkPressureProgress();
+    render();
+  } else {
+    logMsg('Der General wendet sich mit seinen Truppen gegen euch!');
+    startGeneralBattle();
+  }
+}
+function startGeneralBattle(){
+  pendingLocation = { kind:'general-battle', ref:{ id:'general-battle', name:'Düsterkuppel-Schlacht' } };
+  generateBattle(pendingLocation);
+  screen='battle';
+  render();
+}
+function unlockHeadOfSnake(){
+  if(game.act3.headOfSnake.unlocked) return;
+  game.act3.headOfSnake.unlocked = true;
+  game.act3.headOfSnake.dealAccepted = game.act3.pressure.duesterkuppel.dealAccepted;
+  queueModal('Die Grafschaft Demeron ist endgültig vom feindlichen Reich abgeschnitten. Der Weg zur Hauptstadt des Feindes liegt nun offen.');
+}
+function completeHeadOfSnake(goldOneTime, monthlyIncome, message){
+  const h = game.act3.headOfSnake;
+  h.completed = true;
+  h.monthlyIncome = monthlyIncome;
+  game.gold += goldOneTime;
+  logMsg(message);
+  queueModal(message + (monthlyIncome>0 ? ` Der König zahlt euch künftig zusätzlich ${monthlyIncome} Gold pro Monat.` : ' Es fließen keine weiteren monatlichen Zahlungen für diese Grafschaft.'));
+}
+function startStoryBattle(kind, name){
+  pendingLocation = { kind, ref:{ id:kind, name } };
+  generateBattle(pendingLocation);
+  screen='battle';
+  render();
+}
+function onCapitalFallen(){
+  const h = game.act3.headOfSnake;
+  h.capitalCleared = true;
+  if(h.dealAccepted){
+    // Pfad A: Versprechen wird automatisch eingelöst, keine Wahl.
+    logMsg('Wie versprochen wird der Graf getötet.');
+    queueModal('Am Ende haltet ihr euer Versprechen und tötet den Grafen.', ()=>{
+      startStoryBattle('son-army-a', "Rachearmee des Grafensohns");
+    });
+  } else {
+    queueStoryChoice(
+      'Ihr erreicht den großen Versammlungssaal des Palastes und trefft dort auf den Grafen und seine Frau. „Seid ihr gekommen mich zu töten, oder mir den Treueid zu eurem König abzuringen?“',
+      'Das Schicksal des Grafen',
+      { label:'Graf töten', callback: killTheCount },
+      { label:'Treueeid', callback: acceptOath }
+    );
+  }
+}
+function acceptOath(){
+  completeHeadOfSnake(1000, 500, 'Der Graf kniet sich nieder und schwört beim Leben eines Sohnes, dass er ab sofort eurem König treue Dienste erweisen wird. Der König belohnt euch mit 1000 Gold und einem monatlichen Sold von zusätzlich 500 Gold.');
+}
+function killTheCount(){
+  queueModal('Als ihr euren Feuerzauber auf den Grafen wirken wollt, wirft sich seine Frau auf ihn und verbrennt unter den heißen Flammen des Feuerballs. Noch während der Graf schockiert auf seine tote Frau starrt, erlöst ihr auch ihn von seinem Schmerz. Plötzlich werdet ihr von Kampfgeräuschen hochgeschreckt. Ein Bote erscheint: „Der Sohn des Grafen. Er attackiert uns mit einer Entsatzarmee!“',
+    ()=>{ startStoryBattle('son-army-b', 'Entsatzarmee des Grafensohns'); }
+  );
+}
+function onSonArmyDefeated(pathLabel){
+  queueStoryChoice(
+    'Zerknirscht tritt Hendrik, der Sohn des Grafen, vor euch. „Ihr habt meine Familie getötet und meine Armee vernichtet. Wollt ihr mir jetzt auch noch mein Leben nehmen? Ich biete euch hiermit meine Kapitulation an!“',
+    'Hendriks Kapitulation',
+    { label:'Annehmen', callback: ()=> acceptSonCapitulation(pathLabel) },
+    { label:'Ausschlagen', callback: ()=> declineSonCapitulation(pathLabel) }
+  );
+}
+function acceptSonCapitulation(pathLabel){
+  if(pathLabel==='a'){
+    logMsg('Der General fühlt sich um sein Versprechen betrogen und greift an!');
+    queueModal('Ihr nehmt Hendriks Kapitulation an. Der General, der auf die Statthalterschaft gehofft hatte, fühlt sich betrogen und wendet sich mit seinen Truppen gegen euch!', ()=>{
+      startStoryBattle('a-general-retaliation', 'Rache des Generals');
+    });
+  } else {
+    completeHeadOfSnake(1000, 250, 'Ihr nehmt Hendriks Kapitulation an. Die Grafschaft bleibt heil unter der Kontrolle des Sohns.');
+  }
+}
+function declineSonCapitulation(pathLabel){
+  startStoryBattle('final-battle', pathLabel==='a' ? 'Der Fall Demerons' : 'Die letzte Schlacht um Demeron');
 }
 
 /* ===================== XP / Level / Beförderung ===================== */
@@ -969,6 +1200,13 @@ function enemySingular(loc){
   if(loc.kind==='rumor') return 'Schattenkrieger';
   if(loc.kind==='feldlager') return 'Soldat';
   if(loc.kind==='spaeher') return 'Späher';
+  if(loc.kind==='grenzburg') return 'Soldat';
+  if(loc.kind==='trio-city' || loc.kind==='trio-castle') return 'Soldat';
+  if(loc.kind==='trio-forest') return 'Bandit';
+  if(loc.kind==='pressure-city' || loc.kind==='pressure-castle' || loc.kind==='general-battle') return 'Soldat';
+  if(loc.kind && loc.kind.indexOf('capital')===0) return 'Soldat';
+  if(loc.kind==='son-army-a' || loc.kind==='son-army-b' || loc.kind==='a-general-retaliation') return 'Soldat';
+  if(loc.kind==='final-battle') return 'Soldat';
   return 'Gegner';
 }
 function enemyPlural(loc){
@@ -978,6 +1216,15 @@ function enemyPlural(loc){
   if(loc.kind==='rumor') return 'Schattenkrieger';
   if(loc.kind==='feldlager') return 'Soldaten & Kampfmagier';
   if(loc.kind==='spaeher') return 'Späher';
+  if(loc.kind==='grenzburg') return 'Soldaten & Magier';
+  if(loc.kind==='trio-city') return 'Soldaten & Magier';
+  if(loc.kind==='trio-castle') return 'Soldaten';
+  if(loc.kind==='trio-forest') return 'Banditen';
+  if(loc.kind==='pressure-city' || loc.kind==='pressure-castle') return 'Soldaten';
+  if(loc.kind==='general-battle' || loc.kind==='a-general-retaliation' || loc.kind==='son-army-b') return 'Soldaten & Magier';
+  if(loc.kind==='capital-b') return 'Soldaten & Magier';
+  if(loc.kind && loc.kind.indexOf('capital')===0) return 'Soldaten';
+  if(loc.kind==='son-army-a' || loc.kind==='final-battle') return 'Soldaten';
   return 'Gegner';
 }
 function getFieldCampStats(){
@@ -988,6 +1235,8 @@ function getFieldCampStats(){
   return { soldiers, level: Math.max(1, level) };
 }
 function getEnemyGroups(loc){
+  const pressureGroups = getPressureEnemyGroups(loc);
+  if(pressureGroups) return pressureGroups;
   if(loc.kind==='village'){
     // Schwierigkeit richtet sich nach der Reihenfolge, in der der Spieler Dörfer befreit (nicht nach Dorf-Index).
     const tier = Math.min(game.world.villageWinCount+1, 3);
@@ -1045,7 +1294,111 @@ function getEnemyGroups(loc){
   if(loc.kind==='spaeher'){
     return [{count:5, level:Math.max(1,getStrongestPartyLevel()+1), weapons:['SPEER']}];
   }
+  if(loc.kind==='grenzburg'){
+    const avg = Math.round(getAveragePartyLevel());
+    return [
+      {count:8, level:avg, weapons:['SCHWERT','SPEER']},
+      {count:2, level:avg, weapons:['SCHWERT'], isMage:true}
+    ];
+  }
+  if(loc.kind==='trio-city'){
+    const avg = Math.round(getAveragePartyLevel());
+    return [
+      {count:12, level:avg, weapons:['SCHWERT','AXT','SPEER']},
+      {count:2, level:avg, weapons:['SCHWERT'], isMage:true}
+    ];
+  }
+  if(loc.kind==='trio-castle'){
+    const avg = Math.round(getAveragePartyLevel());
+    const trio = game.act3.trio;
+    const groups = [{count:10, level:avg+1, weapons:['SCHWERT','SPEER']}];
+    if(!trio.city.cleared && !trio.forest.cleared){
+      groups.push({count:6, level:avg+1, weapons:['SCHWERT','SPEER']});
+      groups.push({count:2, level:avg+1, weapons:['SCHWERT'], isMage:true});
+    }
+    return groups;
+  }
+  if(loc.kind==='trio-forest'){
+    const avg = Math.round(getAveragePartyLevel());
+    const trio = game.act3.trio;
+    const groups = [{count:10, level:avg, weapons:['AXT']}];
+    if(!trio.city.cleared) groups.push({count:8, level:avg, weapons:['AXT']});
+    return groups;
+  }
   return [];
+}
+function computeTrioReinforcements(kind){
+  // "Verstärkung" ist ein eigenständiges Element: trifft nach 5 Runden aus der jeweiligen
+  // Himmelsrichtung ein, sofern die unterstützende Location noch nicht erobert ist.
+  // Lage: Versorgungsstadt = Mitte, Burg = Westen, Wald = Osten.
+  const trio = game.act3.trio;
+  const avg = Math.round(getAveragePartyLevel());
+  const waves = [];
+  if(kind==='trio-city'){
+    if(!trio.castle.cleared) waves.push({round:5, side:'west', count:6, level:avg+2, weapons:['SCHWERT','AXT','SPEER'], enemyKind:'hostile', label:'Soldaten'});
+    if(!trio.forest.cleared) waves.push({round:5, side:'east', count:8, level:avg+3, weapons:['AXT'], enemyKind:'bandit', label:'Banditen'});
+  } else if(kind==='trio-castle'){
+    if(!trio.city.cleared && !trio.forest.cleared){
+      waves.push({round:5, side:'east', count:8, level:avg+3, weapons:['AXT'], enemyKind:'bandit', label:'Banditen'});
+    }
+  } else if(kind==='trio-forest'){
+    if(!trio.castle.cleared){
+      waves.push({round:5, side:'west', count:6, level:avg+2, weapons:['SCHWERT','AXT','SPEER'], enemyKind:'hostile', label:'Soldaten'});
+    }
+  }
+  return waves;
+}
+function getPressureEnemyGroups(loc){
+  const avg = Math.round(getAveragePartyLevel());
+  if(loc.kind==='pressure-city'){
+    // Truppenstärke der Städte war in der Vorgabe nicht beziffert — als Annahme auf
+    // Partydurchschnitt gesetzt (etwas schwächer als die 12-15 Soldaten der Burgen).
+    return [{count:10, level:avg, weapons:['SCHWERT','AXT','SPEER']}];
+  }
+  if(loc.kind==='pressure-castle'){
+    return [{count:13, level:avg, weapons:['SCHWERT','AXT','SPEER']}];
+  }
+  if(loc.kind==='general-battle'){
+    return [
+      {count:20, level:avg+2, weapons:['SCHWERT','AXT','SPEER']},
+      {count:4, level:avg+2, weapons:['SCHWERT'], isMage:true}
+    ];
+  }
+  if(loc.kind==='capital-support'){
+    return [{count:14, level:avg, weapons:['SCHWERT','AXT','SPEER']}];
+  }
+  if(loc.kind==='capital-a'){
+    return [{count:20, level:avg, weapons:['SCHWERT','AXT','SPEER']}];
+  }
+  if(loc.kind==='capital-b'){
+    const uncleared = game.act3.headOfSnake.supportCastles.filter(c=>!c.cleared).length;
+    const groups = [
+      {count:15, level:avg+1, weapons:['SCHWERT','AXT','SPEER']},
+      {count:5, level:avg+1, weapons:['SCHWERT'], isMage:true}
+    ];
+    if(uncleared>0) groups.push({count:6*uncleared, level:avg+2, weapons:['SCHWERT','AXT','SPEER']});
+    return groups;
+  }
+  if(loc.kind==='son-army-a'){
+    return [{count:20, level:avg+1, weapons:['SCHWERT','AXT','SPEER']}];
+  }
+  if(loc.kind==='son-army-b'){
+    return [
+      {count:24, level:avg+2, weapons:['SCHWERT','AXT','SPEER']},
+      {count:5, level:avg+2, weapons:['SCHWERT'], isMage:true},
+      {count:1, level:avg+3, weapons:['SCHWERT'], isLeader:true, leaderName:'Hendrik', leaderRank:'Grafensohn'}
+    ];
+  }
+  if(loc.kind==='a-general-retaliation'){
+    return [
+      {count:20, level:avg+2, weapons:['SCHWERT','AXT','SPEER']},
+      {count:4, level:avg+2, weapons:['SCHWERT'], isMage:true}
+    ];
+  }
+  if(loc.kind==='final-battle'){
+    return [{count:20, level:1, weapons:['SPEER']}];
+  }
+  return null;
 }
 function getEncounterInfo(loc){
   const groups = getEnemyGroups(loc);
@@ -1160,6 +1513,11 @@ function generateBattle(loc){
     const ty = randInt(1,3), tx = randInt(2,size-3);
     grid[ty][tx]='WACHTURM';
     specialTiles.push({x:tx,y:ty,type:'WACHTURM'});
+  } else if(loc.kind==='general-battle'){
+    // Sechs versetzte Wachtürme in den oberen zwei Reihen.
+    const row1 = 0, row2 = 1;
+    [1,4,7,10].forEach((x,i)=>{ if(i<3 && x<size){ grid[row1][x]='WACHTURM'; specialTiles.push({x,y:row1,type:'WACHTURM'}); } });
+    [2,5,8,11].forEach((x,i)=>{ if(i<3 && x<size){ grid[row2][x]='WACHTURM'; specialTiles.push({x,y:row2,type:'WACHTURM'}); } });
   }
 
   let roster = getActivePlayerRoster();
@@ -1182,9 +1540,9 @@ function generateBattle(loc){
       const maxMag = isMage ? (Math.floor(rng()*9)+11) : 0;
       const defBonus = g.isCommander ? ARMOR_TIER_BONUS.leder.def : 0; // Lagerkommandant trägt Lederrüstung
       enemies.push({
-        id:'e'+counter, name: g.isLeader ? 'Bandenanführer' : (g.isCommander ? 'Lagerkommandant' : (isMage ? 'Kampfmagier '+(counter+1) : enemySingular(loc)+' '+(counter+1))),
+        id:'e'+counter, name: g.isLeader ? (g.leaderName||'Bandenanführer') : (g.isCommander ? 'Lagerkommandant' : (isMage ? 'Kampfmagier '+(counter+1) : enemySingular(loc)+' '+(counter+1))),
         team:'enemy', isAlly:false, isMage, isCommander:!!g.isCommander, enemyKind, gender: rng()<0.5?'m':'w', weapon:w, level:g.level,
-        rank: g.isLeader ? 'Anführer' : (g.isCommander ? 'Lagerkommandant' : (isMage?'Magier':'Gegner')),
+        rank: g.isLeader ? (g.leaderRank||'Anführer') : (g.isCommander ? 'Lagerkommandant' : (isMage?'Magier':'Gegner')),
         armorTier: g.isCommander ? 'leder' : undefined,
         atk:Math.floor(rng()*10)+1+bonus, def:Math.floor(rng()*10)+1+bonus+defBonus, spd:Math.floor(rng()*10)+1+bonus, mag:maxMag, maxMag,
         maxHp, hp:maxHp, xp:0, x:0,y:0, alive:true, hasMoved:false, hasActed:false
@@ -1227,8 +1585,43 @@ function generateBattle(loc){
     phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
     turnNumber:1, enemyIdx:0, outcome:null, lastAttackerId:null,
     deploying:true, deploySelected:null, castingSpell:null,
-    damagePopups:[], inspecting:null, inspectRange:null, showInventory:false, confrontation:null
+    damagePopups:[], inspecting:null, inspectRange:null, showInventory:false, confrontation:null,
+    reinforcementWaves: (loc.kind==='trio-city'||loc.kind==='trio-castle'||loc.kind==='trio-forest') ? computeTrioReinforcements(loc.kind) : []
   };
+}
+function spawnReinforcementWave(wave){
+  const size = battle.size;
+  const cols = wave.side==='west' ? [0,1] : [size-2,size-1];
+  const cand=[];
+  for(const x of cols) for(let y=0;y<size;y++){
+    if(TERRAIN[battle.grid[y][x]].cost<=2 && !unitAt(x,y)) cand.push([x,y]);
+  }
+  for(let i=cand.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [cand[i],cand[j]]=[cand[j],cand[i]]; }
+  const bonus = wave.level-1;
+  for(let i=0;i<wave.count;i++){
+    const pos = cand[i] || [wave.side==='west'?0:size-1, i%size];
+    const w = wave.weapons[randInt(0,wave.weapons.length-1)];
+    const maxHp = randInt(15,25)+bonus*3;
+    battle.units.push({
+      id:'reinf'+battle.units.length+'_'+i, name:(wave.label||'Gegner')+' (Verstärkung)',
+      team:'enemy', isAlly:false, isMage:false, enemyKind:wave.enemyKind, gender: Math.random()<0.5?'m':'w',
+      weapon:w, level:wave.level, rank:'Gegner',
+      atk:randInt(1,10)+bonus, def:randInt(1,10)+bonus, spd:randInt(1,10)+bonus, mag:0, maxMag:0,
+      maxHp, hp:maxHp, xp:0, x:pos[0], y:pos[1], alive:true, hasMoved:false, hasActed:false
+    });
+  }
+  const dirTxt = wave.side==='west' ? 'Westen' : 'Osten';
+  logMsg(`Verstärkung trifft ein: ${wave.count} ${wave.label} aus dem ${dirTxt}!`);
+  queueModal(`Verstärkung trifft ein: ${wave.count} ${wave.label} nähern sich aus dem ${dirTxt}!`);
+}
+function checkReinforcements(){
+  if(!battle || !battle.reinforcementWaves || !battle.reinforcementWaves.length) return;
+  battle.reinforcementWaves.forEach(wave=>{
+    if(!wave.spawned && battle.turnNumber>=wave.round){
+      wave.spawned = true;
+      spawnReinforcementWave(wave);
+    }
+  });
 }
 
 /* ===================== Kampf-Logik ===================== */
@@ -1923,6 +2316,7 @@ function finishEnemyPhase(){
   tickBuffs();
   regenMana();
   battle.phase='player'; battle.mode='idle'; battle.turnNumber++; battle.enemyIdx=0;
+  checkReinforcements();
   render();
 }
 
@@ -2016,6 +2410,93 @@ function endBattle(outcome){
     } else {
       logMsg('Der Angriff auf den Spähertrupp ist gescheitert.');
     }
+  } else if(loc.kind==='grenzburg'){
+    if(win){
+      game.act3.grenzburg.cleared = true;
+      game.act3.trio.unlocked = true;
+      logMsg('Die Grenzburg ist gefallen.');
+      queueModal('Die Grenzburg ist gefallen. Der Weg in die Grafschaft Demeron steht offen — Versorgungsstadt, Grafenburg und der geheimnisvolle Wald sind nun erreichbar.');
+    } else {
+      logMsg('Der Angriff auf die Grenzburg ist gescheitert.');
+    }
+  } else if(loc.kind==='trio-city' || loc.kind==='trio-castle' || loc.kind==='trio-forest'){
+    const part = loc.kind==='trio-city' ? game.act3.trio.city : loc.kind==='trio-castle' ? game.act3.trio.castle : game.act3.trio.forest;
+    if(win){
+      part.cleared = true;
+      logMsg(`${part.name} wurde eingenommen.`);
+      checkTrioCompleted();
+    } else {
+      logMsg(`Der Angriff auf ${part.name} ist gescheitert.`);
+    }
+  } else if(loc.kind==='pressure-castle'){
+    if(win){
+      loc.ref.cleared = true;
+      loc.ref.capturedAtMonth = game.month;
+      logMsg(`${loc.ref.name} wurde erobert.`);
+      checkPressureProgress();
+    } else {
+      logMsg(`Der Angriff auf ${loc.ref.name} ist gescheitert.`);
+    }
+  } else if(loc.kind==='pressure-city'){
+    if(win){
+      loc.ref.cityCleared = true;
+      logMsg(`${loc.ref.cityName} wurde erobert.`);
+      checkPressureProgress();
+    } else {
+      logMsg(`Der Angriff auf ${loc.ref.cityName} ist gescheitert.`);
+    }
+  } else if(loc.kind==='general-battle'){
+    if(win){
+      logMsg('Die Truppen des Generals wurden besiegt.');
+      checkPressureProgress();
+    } else {
+      logMsg('Die Schlacht gegen den General ist verloren gegangen.');
+    }
+  } else if(loc.kind==='capital-support'){
+    if(win){
+      game.act3.headOfSnake.supportCastles[loc.ref.idx].cleared = true;
+      logMsg(`${loc.ref.name} wurde erobert.`);
+    } else {
+      logMsg(`Der Angriff auf ${loc.ref.name} ist gescheitert.`);
+    }
+  } else if(loc.kind==='capital-a' || loc.kind==='capital-b'){
+    if(win){
+      logMsg('Die Hauptstadt ist gefallen.');
+      onCapitalFallen();
+    } else {
+      logMsg('Der Angriff auf die Hauptstadt ist gescheitert.');
+    }
+  } else if(loc.kind==='son-army-a'){
+    if(win){
+      logMsg('Die Armee des Grafensohns wurde besiegt.');
+      onSonArmyDefeated('a');
+    } else {
+      logMsg('Die Schlacht gegen die Armee des Grafensohns ist verloren gegangen.');
+    }
+  } else if(loc.kind==='son-army-b'){
+    if(win){
+      logMsg('Die Entsatzarmee des Grafensohns wurde besiegt.');
+      onSonArmyDefeated('b');
+    } else {
+      logMsg('Die Schlacht gegen die Entsatzarmee ist verloren gegangen.');
+    }
+  } else if(loc.kind==='a-general-retaliation'){
+    if(win){
+      completeHeadOfSnake(1000, 250, 'Ihr schlagt die Rache des Generals zurück. Die Grafschaft bleibt heil unter der Kontrolle des Sohns.');
+    } else {
+      logMsg('Die Schlacht gegen den General ist verloren gegangen.');
+    }
+  } else if(loc.kind==='final-battle'){
+    if(win){
+      const wasDealAccepted = game.act3.headOfSnake.dealAccepted;
+      completeHeadOfSnake(2500, 0,
+        wasDealAccepted
+          ? 'Es kommt zur finalen Schlacht. Die Grafschaft wird zerstört, und der General wird als neuer Graf eingesetzt.'
+          : 'Es kommt zur letzten Schlacht um Demeron. Die Grafschaft wird zerstört.'
+      );
+    } else {
+      logMsg('Die letzte Schlacht um Demeron ist verloren gegangen.');
+    }
   }
   if(game.rumor && game.rumor.unlocked && loc.kind!=='rumor'){
     game.rumor.actionsSince++;
@@ -2031,6 +2512,8 @@ function endBattle(outcome){
   checkNextStageTrigger();
   attemptFieldCampCastleRaid();
   checkNorthFrontResolved();
+  checkCastleRecapture();
+  checkDuesterkuppelExpiry();
   checkPassiveIncome();
   checkGameCompleted();
   battle=null; screen='world'; pendingLocation=null;
@@ -2143,6 +2626,9 @@ function checkPassiveIncome(){
       game.castleIncomeAnnounced = true;
       queueModal('Der König ist zufrieden mit eueren Leistungen und unterstützt euch ab sofort monatlich mit 200 Gold.');
     }
+  }
+  if(game.act3 && game.act3.headOfSnake.monthlyIncome>0){
+    game.gold += game.act3.headOfSnake.monthlyIncome;
   }
 }
 
@@ -2438,9 +2924,103 @@ function renderWorldScreen(){
     });
     html += '</div></div>';
   }
+
+  if(game.act3 && game.act3.unlocked){
+    html += renderAct3Section();
+  }
   return html;
 }
 
+function renderAct3Section(){
+  const a3 = game.act3;
+  let html = '<div class="map-region"><h2>Feldzug gegen Demeron</h2></div>';
+  if(!a3.grenzburg.cleared){
+    html += `<div class="map-region"><h2>Grenzburg</h2><div class="node-row">
+      <div class="node clickable danger" data-action="select-loc" data-kind="grenzburg" data-idx="0">
+        <div class="n-name">Grenzburg</div><div class="n-state">Einsatzort verfügbar</div></div>
+    </div></div>`;
+    return html;
+  }
+  if(a3.trio.unlocked && !a3.trio.completed){
+    html += '<div class="map-region"><h2>Grafschaft Demeron <span class="hint">Westen — Mitte — Osten</span></h2><div class="node-row">';
+    const parts = [
+      {kind:'trio-castle', ref:a3.trio.castle, label:'(Westen)'},
+      {kind:'trio-city',   ref:a3.trio.city,   label:'(Mitte)'},
+      {kind:'trio-forest', ref:a3.trio.forest, label:'(Osten)'}
+    ];
+    parts.forEach(p=>{
+      if(p.ref.cleared){
+        html += `<div class="node success"><div class="n-name">${p.ref.name}</div><div class="n-state">Erobert ${p.label}</div></div>`;
+      } else {
+        html += `<div class="node clickable" data-action="select-loc" data-kind="${p.kind}" data-idx="0">
+          <div class="n-name">${p.ref.name}</div><div class="n-state">Einsatzort verfügbar ${p.label}</div></div>`;
+      }
+    });
+    html += '</div></div>';
+  }
+  if(a3.pressure.unlocked && !a3.pressure.completed){
+    html += renderPressureSection();
+  }
+  if(a3.headOfSnake.unlocked && !a3.headOfSnake.completed){
+    html += renderHeadOfSnakeSection();
+  }
+  return html;
+}
+function renderHeadOfSnakeSection(){
+  const h = game.act3.headOfSnake;
+  let html = '';
+  if(h.capitalCleared) return html; // Hauptstadt gefallen: der Rest läuft über Story-Kämpfe/Entscheidungen
+  if(h.dealAccepted){
+    html += `<div class="map-region"><h2>Der Kopf der Schlange</h2><div class="node-row">
+      <div class="node clickable danger" data-action="select-loc" data-kind="capital-a" data-idx="0">
+        <div class="n-name">Hauptstadt</div><div class="n-state">Einsatzort verfügbar</div></div>
+    </div></div>`;
+  } else {
+    html += '<div class="map-region"><h2>Der Kopf der Schlange <span class="hint">Burgen stützen die Hauptstadtverteidigung</span></h2><div class="node-row">';
+    h.supportCastles.forEach((c,i)=>{
+      if(c.cleared){
+        html += `<div class="node success"><div class="n-name">${c.name}</div><div class="n-state">Erobert</div></div>`;
+      } else {
+        html += `<div class="node clickable" data-action="select-loc" data-kind="capital-support" data-idx="${i}">
+          <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+      }
+    });
+    html += `<div class="node clickable danger" data-action="select-loc" data-kind="capital-b" data-idx="0">
+      <div class="n-name">Hauptstadt</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+    html += '</div></div>';
+  }
+  return html;
+}
+function renderPressureSection(){
+  const p = game.act3.pressure;
+  let html = '<div class="map-region"><h2>Grafschaft Demeron unter Druck <span class="hint">Städte versorgen ihre Grenzburgen</span></h2><div class="node-row" style="align-items:flex-start;gap:22px;">';
+  p.castles.forEach(c=>{
+    html += '<div class="tree-wrap" style="gap:0;">';
+    if(c.cityCleared){
+      html += `<div class="node success tree-node"><div class="n-name">${c.cityName}</div><div class="n-state">Erobert</div></div>`;
+    } else {
+      html += `<div class="node clickable tree-node" data-action="select-loc" data-kind="pressure-city" data-idx="${c.idx}">
+        <div class="n-name">${c.cityName}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+    }
+    html += '<div class="tree-connector"></div>';
+    if(c.cleared){
+      html += `<div class="node success tree-node"><div class="n-name">${c.name}</div><div class="n-state">Erobert</div></div>`;
+    } else {
+      html += `<div class="node clickable danger tree-node" data-action="select-loc" data-kind="pressure-castle" data-idx="${c.idx}">
+        <div class="n-name">${c.name}</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+    }
+    html += '</div>';
+  });
+  html += '</div></div>';
+  if(p.duesterkuppel.unlocked && !p.duesterkuppel.resolved){
+    const monthsLeft = Math.max(0, p.duesterkuppel.expiresMonth - game.month);
+    html += `<div class="map-region"><h2>Düsterkuppel <span class="hint">Frist: noch ${monthsLeft} Monat(e)</span></h2><div class="node-row">
+      <div class="node clickable danger" data-action="engage-duesterkuppel">
+        <div class="n-name">Düsterkuppel</div><div class="n-state">Treffen mit dem General</div></div>
+    </div></div>`;
+  }
+  return html;
+}
 function renderDependencyTree(){
   const w = game.world;
   let html = '<div class="map-region"><h2>Feindliche Nordfront</h2><div class="tree-wrap">';
@@ -2647,11 +3227,15 @@ function renderSavesScreen(){
   return html;
 }
 
+function locDisplayName(loc){
+  if(loc.kind==='pressure-city') return loc.ref.cityName;
+  return loc.ref.name;
+}
 function renderConfirmModal(){
   const loc = pendingLocation;
   const info = getEncounterInfo(loc);
   return `<div class="overlay"><div class="modal">
-    <h2>${loc.ref.name}</h2>
+    <h2>${locDisplayName(loc)}</h2>
     <div class="info-line"><span>Gegner</span><span>${info.count} × ${info.label}</span></div>
     <div class="info-line"><span>Stufe</span><span>${info.levelText}</span></div>
     <div class="info-line"><span>Eigene Kämpfer</span><span>${getActivePlayerRoster().length}</span></div>
@@ -2675,6 +3259,16 @@ function renderAnnouncementModal(){
       <div class="buttons">
         <button class="primary" data-action="mage-choice-select" data-choice="erzmagier" data-unit-id="${m.unit.id}">Erzmagier</button>
         <button class="primary" data-action="mage-choice-select" data-choice="nekromant" data-unit-id="${m.unit.id}">Nekromant</button>
+      </div>
+    </div></div>`;
+  }
+  if(m.action==='story-choice'){
+    return `<div class="overlay"><div class="modal" style="text-align:center;">
+      <h2>${m.title||'Entscheidung'}</h2>
+      <p style="color:var(--text-dim);line-height:1.5;text-align:left;">${m.text}</p>
+      <div class="buttons">
+        <button class="primary" data-action="story-choice-select" data-choice="a">${m.optionA.label}</button>
+        <button data-action="story-choice-select" data-choice="b">${m.optionB.label}</button>
       </div>
     </div></div>`;
   }
@@ -2940,6 +3534,13 @@ function attachHandlers(){
           : kind==='rumor' ? game.rumor.camps[idx]
           : kind==='feldlager' ? game.fieldCamp
           : kind==='spaeher' ? game.scoutPatrol
+          : kind==='grenzburg' ? game.act3.grenzburg
+          : kind==='trio-city' ? game.act3.trio.city
+          : kind==='trio-castle' ? game.act3.trio.castle
+          : kind==='trio-forest' ? game.act3.trio.forest
+          : (kind==='pressure-castle' || kind==='pressure-city') ? game.act3.pressure.castles[idx]
+          : kind==='capital-support' ? game.act3.headOfSnake.supportCastles[idx]
+          : (kind==='capital-a' || kind==='capital-b') ? { id:kind, name:'Hauptstadt' }
           : game.offensive.camps[idx];
         if(kind==='feldlager' && !game.offensive.camps.every(c=>c.cleared)){
           if(!confirm('Die Versorgungslager unterstützen das Feldlager mit Männern und Ausrüstung. Bist du sicher, dass du das Feldlager jetzt schon attackieren möchtest?')){
@@ -2950,6 +3551,7 @@ function attachHandlers(){
         screen='confirm';
         render();
       }
+      else if(action==='engage-duesterkuppel'){ engageDuesterkuppel(); }
       else if(action==='open-shop'){ screen='shop'; render(); }
       else if(action==='open-camp'){ screen='camp'; render(); }
       else if(action==='open-saves'){ screen='saves'; render(); }
@@ -3034,6 +3636,15 @@ function attachHandlers(){
         const u = findUnitById(uid);
         if(u) applyMagePromotionChoice(u, choice);
         modalQueue.shift();
+        if(modalQueue.length) playSfx('ping');
+        render();
+      }
+      else if(action==='story-choice-select'){
+        const m = modalQueue.shift();
+        if(m){
+          const opt = el.getAttribute('data-choice')==='a' ? m.optionA : m.optionB;
+          if(opt && opt.callback) opt.callback();
+        }
         if(modalQueue.length) playSfx('ping');
         render();
       }
