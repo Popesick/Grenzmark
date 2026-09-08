@@ -1177,7 +1177,7 @@ function generateBattle(loc){
     phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
     turnNumber:1, enemyIdx:0, outcome:null, lastAttackerId:null,
     deploying:true, deploySelected:null, castingSpell:null,
-    damagePopups:[], inspecting:null, inspectRange:null
+    damagePopups:[], inspecting:null, inspectRange:null, showInventory:false
   };
 }
 
@@ -1432,6 +1432,7 @@ function selectUnit(u){
   battle.inspecting=null; battle.inspectRange=null;
   battle.selected=u;
   battle.moveRange=computeReachable(u);
+  battle.showInventory=false;
   const targets = adjacentEnemies(u);
   battle.attackRange = targets.length ? new Set(targets.map(t=>t.x+','+t.y)) : null;
   battle.mode='moving';
@@ -1513,6 +1514,10 @@ function usePotionInBattle(kind){
   u.hasActed = true;
   battle.selected=null; battle.moveRange=null; battle.attackRange=null; battle.mode='idle';
   if(!checkAllActedAutoEnd()) render();
+}
+function toggleBattleInventory(){
+  battle.showInventory = !battle.showInventory;
+  render();
 }
 function canRest(u){
   return !!u && !u.hasMoved && !u.hasActed && adjacentOpponents(u).length===0;
@@ -2368,6 +2373,16 @@ function renderShopScreen(){
   return html;
 }
 
+function battlePotionPairHtml(u, abbr, kind){
+  const cfg = POTION_CONFIG[kind];
+  const statOk = cfg.stat==='hp' ? u.hp<u.maxHp : u.mag<u.maxMag;
+  const allowed = !(cfg.mageOnly && !u.isMage);
+  const canUse = allowed && statOk && u[kind]>0;
+  return `<div class="potion-pair">
+    <span>${abbr} (${cfg.amount} ${cfg.stat==='hp'?'HP':'MP'})</span>
+    <button data-action="use-potion" data-potion="${kind}" ${canUse?'':'disabled'}>Trinken</button>
+  </div>`;
+}
 function campPotionPairHtml(u, label, kind){
   return `<div class="potion-pair">
     <span>${label}</span>
@@ -2558,21 +2573,19 @@ function renderBattleScreen(){
     <button data-action="end-phase" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Phase beenden</button>
     <button class="danger" data-action="retreat" ${(battle.phase==='player' && !battle.outcome)?'':'disabled'}>Rückzug</button>`;
   if(battle.selected && battle.selected.team==='player' && !battle.selected.hasActed){
-    const su = battle.selected;
-    if(su.healPotions>0 && su.hp<su.maxHp){
-      html += `<button data-action="use-potion" data-potion="healPotions">Heiltrank trinken (+5 HP, ${su.healPotions})</button>`;
-    }
-    if(su.healPotionsLarge>0 && su.hp<su.maxHp){
-      html += `<button data-action="use-potion" data-potion="healPotionsLarge">Großen Heiltrank trinken (+25 HP, ${su.healPotionsLarge})</button>`;
-    }
-    if(su.isMage && su.manaPotions>0 && su.mag<su.maxMag){
-      html += `<button data-action="use-potion" data-potion="manaPotions">Manatrank trinken (+5 MP, ${su.manaPotions})</button>`;
-    }
-    if(su.isMage && su.manaPotionsLarge>0 && su.mag<su.maxMag){
-      html += `<button data-action="use-potion" data-potion="manaPotionsLarge">Großen Manatrank trinken (+25 MP, ${su.manaPotionsLarge})</button>`;
-    }
+    html += `<button data-action="toggle-inventory" ${battle.showInventory?'class="primary"':''}>Inventar</button>`;
   }
   html += `</div></div>`;
+
+  // 1b) Inventar (Tränke) — kompaktes Untermenü, nur bei ausgewählter, noch nicht gezogener Einheit
+  if(battle.showInventory && battle.selected && battle.selected.team==='player' && !battle.selected.hasActed){
+    const su = battle.selected;
+    html += `<div class="panel-box"><h3>Inventar</h3>`;
+    html += `<div class="potion-row">${battlePotionPairHtml(su,'HT','healPotions')}${battlePotionPairHtml(su,'Gr. HT','healPotionsLarge')}</div>`;
+    html += `<div class="potion-row">${battlePotionPairHtml(su,'MT','manaPotions')}${battlePotionPairHtml(su,'Gr. MT','manaPotionsLarge')}</div>`;
+    html += `</div>`;
+  }
+
 
   // 2) Magie-Menü (nur wenn Magier ausgewählt, genug MP hat und mind. ein Ziel in Reichweite ist)
   if(battle.selected && battle.selected.isMage && battle.selected.team==='player' && !battle.selected.hasActed && mageHasCastableSpell(battle.selected)){
@@ -2820,6 +2833,7 @@ function attachHandlers(){
       else if(action==='wait'){ waitAction(); }
       else if(action==='rest'){ restAction(); }
       else if(action==='use-potion'){ usePotionInBattle(el.getAttribute('data-potion')); }
+      else if(action==='toggle-inventory'){ toggleBattleInventory(); }
       else if(action==='end-phase'){
         const allActed = battle.units.filter(u=>u.team==='player' && u.alive).every(u=>u.hasActed);
         if(allActed || confirm('Achtung, es wurden noch nicht alle Einheiten bewegt. Willst du wirklich die aktuelle Phase beenden?')){
