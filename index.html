@@ -224,7 +224,6 @@ const ARMOR_TIER_BONUS = {
 };
 const WEAPON_TIER_PRICE = { silber:4000, elementar:10000 }; // +100%
 const ARMOR_TIER_PRICE = { leder:1000, eisen:4000, silber:10000, elementar:20000 }; // +100%
-const POTION_PRICE = 25;
 function computeEquipBonus(u){
   const w = WEAPON_TIER_BONUS[u.weaponTier||'stahl'];
   const a = ARMOR_TIER_BONUS[u.armorTier||'wolle'];
@@ -261,9 +260,16 @@ function buyArmorTier(tier){
   game.shop.armorTiers[tier] = true;
   logMsg(`${ARMOR_TIER_NAME[tier]} für die Truppe erworben.`);
 }
+const POTION_CONFIG = {
+  healPotions:      { price:25,  amount:5,  stat:'hp',  label:'Heiltrank',        mageOnly:false },
+  manaPotions:      { price:25,  amount:5,  stat:'mag', label:'Manatrank',        mageOnly:true  },
+  healPotionsLarge: { price:100, amount:25, stat:'hp',  label:'Großer Heiltrank', mageOnly:false },
+  manaPotionsLarge: { price:100, amount:25, stat:'mag', label:'Großer Manatrank', mageOnly:true  }
+};
 function buyPotion(kind){
-  if(game.gold<POTION_PRICE) return;
-  game.gold -= POTION_PRICE;
+  const cfg = POTION_CONFIG[kind];
+  if(!cfg || game.gold<cfg.price) return;
+  game.gold -= cfg.price;
   game.pool[kind]++;
 }
 function movePotionToUnit(u, kind){
@@ -450,7 +456,7 @@ function randomName(usedSet){
 function bpForSpeed(spd){ return 8 + Math.floor(spd/10); }
 
 function baseEquipFields(){
-  return { weaponTier:'stahl', armorTier:'wolle', equipBonusApplied:{atk:0,def:0,spd:0}, healPotions:1, manaPotions:0 };
+  return { weaponTier:'stahl', armorTier:'wolle', equipBonusApplied:{atk:0,def:0,spd:0}, healPotions:1, manaPotions:0, healPotionsLarge:0, manaPotionsLarge:0 };
 }
 function makeMerc(id, usedNames, forcedWeapon){
   const weapon = forcedWeapon || ['SCHWERT','AXT','SPEER'][randInt(0,2)];
@@ -534,7 +540,7 @@ function initGame(){
     excludedMageName: excludedCandidate,
     gold: 0,
     villageIncomeAnnounced:false, castleIncomeAnnounced:false, completed:false, northFrontResolved:false,
-    pool: { healPotions:0, manaPotions:0 },
+    pool: { healPotions:0, manaPotions:0, healPotionsLarge:0, manaPotionsLarge:0 },
     shop: {
       weaponTiers: { SCHWERT:{silber:false,elementar:false}, AXT:{silber:false,elementar:false}, SPEER:{silber:false,elementar:false} },
       armorTiers: { leder:false, eisen:false, silber:false, elementar:false }
@@ -1463,15 +1469,17 @@ function waitAction(){
 }
 function usePotionInBattle(kind){
   const u = battle.selected;
-  if(!u || u.hasActed || u[kind]<=0) return;
+  const cfg = POTION_CONFIG[kind];
+  if(!u || !cfg || u.hasActed || u[kind]<=0) return;
+  if(cfg.mageOnly && !u.isMage) return;
   u[kind]--;
-  if(kind==='healPotions'){
-    const before=u.hp; u.hp=Math.min(u.maxHp,u.hp+5);
-    logMsg(`${u.name} trinkt einen Heiltrank (+${u.hp-before} HP).`);
+  if(cfg.stat==='hp'){
+    const before=u.hp; u.hp=Math.min(u.maxHp,u.hp+cfg.amount);
+    logMsg(`${u.name} trinkt einen ${cfg.label} (+${u.hp-before} HP).`);
     pushDamagePopup(u.x,u.y,'+'+(u.hp-before),'#5f8f61');
   } else {
-    const before=u.mag; u.mag=Math.min(u.maxMag,u.mag+5);
-    logMsg(`${u.name} trinkt einen Manatrank (+${u.mag-before} MP).`);
+    const before=u.mag; u.mag=Math.min(u.maxMag,u.mag+cfg.amount);
+    logMsg(`${u.name} trinkt einen ${cfg.label} (+${u.mag-before} MP).`);
     pushDamagePopup(u.x,u.y,'+'+(u.mag-before),'#a78bc9');
   }
   u.hasActed = true;
@@ -1910,6 +1918,8 @@ function checkNorthFrontResolved(){
   const fieldCampDone = game.fieldCamp.destroyed;
   if(!(offensiveDone && fieldCampDone)) return;
   game.northFrontResolved = true;
+  game.gold += 1500;
+  queueModal('Für deine Dienste gewährt dir der König 1500 Gold. Nutze sie weise und diene weiter dem Königreich. Bald kommt die Zeit, den Krieg zum Feind zu tragen!');
   if(game.scoutPatrol.unlocked && !game.scoutPatrol.cleared){
     game.scoutPatrol.expired = true;
     logMsg('Mit Feldlager und Versorgungslagern verliert der Spähertrupp seine Bedeutung — die Mission entfällt.');
@@ -2294,9 +2304,11 @@ function renderShopScreen(){
   }
 
   html += `<div class="panel-box"><h3>Tränke</h3><div class="action-row">
-    <button data-action="buy-potion" data-potion="healPotions" ${game.gold<POTION_PRICE?'disabled':''}>Heiltrank +5 HP kaufen (${POTION_PRICE} Gold)</button>
-    <button data-action="buy-potion" data-potion="manaPotions" ${game.gold<POTION_PRICE?'disabled':''}>Manatrank +5 MP kaufen (${POTION_PRICE} Gold)</button>
-  </div><div class="help-text">Im Lager: ${game.pool.healPotions} Heiltränke, ${game.pool.manaPotions} Manatränke. Zuordnung zu Charakteren im Camp.</div></div>`;
+    <button data-action="buy-potion" data-potion="healPotions" ${game.gold<POTION_CONFIG.healPotions.price?'disabled':''}>Heiltrank +5 HP kaufen (${POTION_CONFIG.healPotions.price} Gold)</button>
+    <button data-action="buy-potion" data-potion="manaPotions" ${game.gold<POTION_CONFIG.manaPotions.price?'disabled':''}>Manatrank +5 MP kaufen (${POTION_CONFIG.manaPotions.price} Gold)</button>
+    <button data-action="buy-potion" data-potion="healPotionsLarge" ${game.gold<POTION_CONFIG.healPotionsLarge.price?'disabled':''}>Großer Heiltrank +25 HP kaufen (${POTION_CONFIG.healPotionsLarge.price} Gold)</button>
+    <button data-action="buy-potion" data-potion="manaPotionsLarge" ${game.gold<POTION_CONFIG.manaPotionsLarge.price?'disabled':''}>Großer Manatrank +25 MP kaufen (${POTION_CONFIG.manaPotionsLarge.price} Gold)</button>
+  </div><div class="help-text">Im Lager: ${game.pool.healPotions} Heiltränke, ${game.pool.manaPotions} Manatränke, ${game.pool.healPotionsLarge} große Heiltränke, ${game.pool.manaPotionsLarge} große Manatränke. Manatränke können nur von Magiern genutzt werden. Zuordnung zu Charakteren im Camp.</div></div>`;
 
   html += `<div class="panel-box"><h3>Waffen</h3>`;
   ['SCHWERT','AXT','SPEER'].forEach(wt=>{
@@ -2323,7 +2335,7 @@ function renderShopScreen(){
 }
 
 function renderCampScreen(){
-  let html = '<div class="map-region"><h2>Camp <span class="hint">Ausrüstung zuordnen · 💰 '+game.gold+' Gold · Lager: '+game.pool.healPotions+' Heiltränke, '+game.pool.manaPotions+' Manatränke</span></h2></div>';
+  let html = '<div class="map-region"><h2>Camp <span class="hint">Ausrüstung zuordnen · 💰 '+game.gold+' Gold · Lager: '+game.pool.healPotions+' Heiltränke, '+game.pool.manaPotions+' Manatränke, '+game.pool.healPotionsLarge+' große Heiltränke, '+game.pool.manaPotionsLarge+' große Manatränke</span></h2></div>';
   const roster = getActivePlayerRoster();
   roster.forEach(u=>{
     html += `<div class="panel-box">${unitCardHtml(u)}`;
@@ -2344,8 +2356,12 @@ function renderCampScreen(){
     html += `<div class="statline" style="margin:8px 0 4px;">Tränke</div><div class="action-row">
       <button data-action="potion-to-unit" data-id="${u.id}" data-potion="healPotions" ${game.pool.healPotions<=0?'disabled':''}>+ Heiltrank (${u.healPotions})</button>
       <button data-action="potion-to-pool" data-id="${u.id}" data-potion="healPotions" ${u.healPotions<=0?'disabled':''}>− Heiltrank</button>
+      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="healPotionsLarge" ${game.pool.healPotionsLarge<=0?'disabled':''}>+ Gr. Heiltrank (${u.healPotionsLarge})</button>
+      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="healPotionsLarge" ${u.healPotionsLarge<=0?'disabled':''}>− Gr. Heiltrank</button>
       <button data-action="potion-to-unit" data-id="${u.id}" data-potion="manaPotions" ${game.pool.manaPotions<=0?'disabled':''}>+ Manatrank (${u.manaPotions})</button>
       <button data-action="potion-to-pool" data-id="${u.id}" data-potion="manaPotions" ${u.manaPotions<=0?'disabled':''}>− Manatrank</button>
+      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="manaPotionsLarge" ${game.pool.manaPotionsLarge<=0?'disabled':''}>+ Gr. Manatrank (${u.manaPotionsLarge})</button>
+      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="manaPotionsLarge" ${u.manaPotionsLarge<=0?'disabled':''}>− Gr. Manatrank</button>
     </div></div>`;
   });
   html += `<div class="panel-box"><div class="action-row"><button class="primary" data-action="back-to-world">Zurück zur Weltkarte</button></div></div>`;
@@ -2488,8 +2504,14 @@ function renderBattleScreen(){
     if(su.healPotions>0 && su.hp<su.maxHp){
       html += `<button data-action="use-potion" data-potion="healPotions">Heiltrank trinken (+5 HP, ${su.healPotions})</button>`;
     }
+    if(su.healPotionsLarge>0 && su.hp<su.maxHp){
+      html += `<button data-action="use-potion" data-potion="healPotionsLarge">Großen Heiltrank trinken (+25 HP, ${su.healPotionsLarge})</button>`;
+    }
     if(su.isMage && su.manaPotions>0 && su.mag<su.maxMag){
       html += `<button data-action="use-potion" data-potion="manaPotions">Manatrank trinken (+5 MP, ${su.manaPotions})</button>`;
+    }
+    if(su.isMage && su.manaPotionsLarge>0 && su.mag<su.maxMag){
+      html += `<button data-action="use-potion" data-potion="manaPotionsLarge">Großen Manatrank trinken (+25 MP, ${su.manaPotionsLarge})</button>`;
     }
   }
   html += `</div></div>`;
