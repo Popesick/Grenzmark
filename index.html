@@ -688,6 +688,10 @@ function rejoinFirstAllyBeforeBattle(){
   }
 }
 function allyLeavesOnCastleDefense(){
+  // Sicherheitsnetz: falls der Dauerhaft-Status (alle Dörfer+Lager erledigt) aus irgendeinem
+  // Grund noch nicht erkannt wurde (z.B. bei einem älteren Spielstand), hier nachholen —
+  // sonst könnte Roderick fälschlich noch verlassen, obwohl er längst fest zur Truppe gehört.
+  checkAllyPermanent();
   const a = game.firstAlly;
   if(a.joined && a.active && !a.permanent){
     a.active=false;
@@ -2514,6 +2518,7 @@ function endBattle(outcome){
   checkNorthFrontResolved();
   checkCastleRecapture();
   checkDuesterkuppelExpiry();
+  checkAllyPermanent();
   checkPassiveIncome();
   checkGameCompleted();
   battle=null; screen='world'; pendingLocation=null;
