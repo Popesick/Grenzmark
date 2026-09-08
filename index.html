@@ -113,6 +113,8 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 .tree-row .tree-node{position:relative;}
 .tree-row .tree-node::before{content:'';position:absolute;top:-16px;left:50%;width:1px;height:16px;background:var(--line);transform:translateX(-50%);}
 .tree-connector{width:1px;height:18px;background:var(--line);}
+.feldlager-cluster{display:flex;align-items:center;gap:0;}
+.feldlager-hline{width:26px;height:1px;background:var(--line);flex:0 0 auto;}
 .capital-node .n-name{font-size:16px;}
 
 /* modal */
@@ -2246,10 +2248,24 @@ function renderDependencyTree(){
   });
   html += '</div><div class="tree-connector"></div>';
 
-  html += '<div class="tree-row">';
-  if(game.fieldCamp.destroyed) html += `<div class="node success tree-node"><div class="n-name">Feldlager</div><div class="n-state">Zerstört</div></div>`;
-  else html += `<div class="node clickable danger tree-node" data-action="select-loc" data-kind="feldlager" data-idx="0"><div class="n-name">Feldlager</div><div class="n-state">Einsatzort verfügbar</div></div>`;
-  html += '</div><div class="tree-connector"></div>';
+  // Feldlager (Mitte der Hierarchie) mit optional angehängtem Spähertrupp links daneben,
+  // über eine kurze horizontale Linie verbunden — kein eigenständiger Zweig der Hierarchie.
+  let scoutNodeHtml = '';
+  if(game.scoutPatrol.cleared){
+    scoutNodeHtml = `<div class="node success"><div class="n-name">Spähertrupp</div><div class="n-state">Ausgeschaltet</div></div>`;
+  } else if(game.scoutPatrol.unlocked && !game.scoutPatrol.expired){
+    scoutNodeHtml = `<div class="node clickable" data-action="select-loc" data-kind="spaeher" data-idx="0"><div class="n-name">Spähertrupp</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+  }
+  let feldlagerNodeHtml;
+  if(game.fieldCamp.destroyed) feldlagerNodeHtml = `<div class="node success"><div class="n-name">Feldlager</div><div class="n-state">Zerstört</div></div>`;
+  else feldlagerNodeHtml = `<div class="node clickable danger" data-action="select-loc" data-kind="feldlager" data-idx="0"><div class="n-name">Feldlager</div><div class="n-state">Einsatzort verfügbar</div></div>`;
+
+  html += '<div class="tree-row"><div class="feldlager-cluster">';
+  if(scoutNodeHtml){
+    html += `<div class="scout-node">${scoutNodeHtml}</div><div class="feldlager-hline"></div>`;
+  }
+  html += `<div class="tree-node">${feldlagerNodeHtml}</div>`;
+  html += '</div></div><div class="tree-connector"></div>';
 
   html += '<div class="tree-row multi">';
   w.castles.forEach((c,i)=>{
@@ -2261,17 +2277,6 @@ function renderDependencyTree(){
   html += '</div>';
 
   html += '</div></div>';
-
-  if(game.scoutPatrol.cleared){
-    html += '<div class="map-region"><h2>Spähertrupp</h2><div class="node-row">';
-    html += `<div class="node success"><div class="n-name">Spähertrupp</div><div class="n-state">Ausgeschaltet</div></div>`;
-    html += '</div></div>';
-  } else if(game.scoutPatrol.unlocked && !game.scoutPatrol.expired){
-    html += '<div class="map-region"><h2>Spähertrupp</h2><div class="node-row">';
-    html += `<div class="node clickable" data-action="select-loc" data-kind="spaeher" data-idx="0"><div class="n-name">Spähertrupp</div><div class="n-state">Einsatzort verfügbar</div></div>`;
-    html += '</div></div>';
-  }
-
   return html;
 }
 
