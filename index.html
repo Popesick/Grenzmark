@@ -916,16 +916,16 @@ function checkRumorCompleted(){
 }
 function checkGameCompleted(){
   // Das alte "Missionen abgeschlossen"-Ende ist jetzt der Übergang in Akt 3
-  // (Feldzug gegen die Grafschaft Demeron), kein echtes Spielende mehr.
+  // (Feldzug gegen die Grafschaft Demeron). Die "Gerüchte aus dem Süden" sind eine davon
+  // unabhängige, optionale Nebenquest und blockieren den Übergang nicht.
   if(game.completed) return;
   const villagesDone = game.world.villages.every(v=>v.liberated);
   const campsDone = game.world.camps.every(c=>c.cleared);
   const castlesDone = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
   const offensiveDone = game.offensive.camps.every(c=>c.cleared);
-  const rumorDone = game.rumor.camps.every(c=>c.cleared);
   const fieldCampDone = !game.fieldCamp.unlocked || game.fieldCamp.destroyed;
   const scoutDone = !game.scoutPatrol.unlocked || game.scoutPatrol.cleared || game.scoutPatrol.expired;
-  if(villagesDone && campsDone && castlesDone && offensiveDone && rumorDone && fieldCampDone && scoutDone){
+  if(villagesDone && campsDone && castlesDone && offensiveDone && fieldCampDone && scoutDone){
     game.completed = true;
     unlockAct3();
   }
@@ -2401,6 +2401,12 @@ function endBattle(outcome){
   } else if(loc.kind==='feldlager'){
     if(win){
       game.fieldCamp.destroyed = true;
+      // Ein evtl. noch laufender Überfall wird abgebrochen, die betroffene Burg bleibt sicher.
+      if(game.fieldCamp.raidTargetIdx!=null){
+        const raided = game.world.castles[game.fieldCamp.raidTargetIdx];
+        if(raided && !raided.fallen) raided.siege = 0;
+        game.fieldCamp.raidTargetIdx = null;
+      }
       logMsg('Das feindliche Feldlager wurde zerstört.');
       queueModal('Das feindliche Feldlager wurde zerstört. Die Burgen sind nun endgültig sicher.');
     } else {
@@ -2525,13 +2531,16 @@ function endBattle(outcome){
   render();
 }
 function checkNorthFrontResolved(){
-  // Sind Feldlager und alle Versorgungslager erledigt, erlischt eine noch offene Spähermission
-  // (nicht als Erfolg, sie wird einfach gegenstandslos), und die Nordfront-Missionseinträge
-  // (Burgen, Feldlager, Versorgungslager, Spähertrupp) verschwinden von der Weltkarte.
+  // Sind Burgen gesichert, Feldlager und alle Versorgungslager erledigt, erlischt eine noch
+  // offene Spähermission (nicht als Erfolg, sie wird einfach gegenstandslos), und die
+  // Nordfront-Missionseinträge (Burgen, Feldlager, Versorgungslager, Spähertrupp) verschwinden
+  // von der Weltkarte. Die Burgen müssen dafür WIRKLICH gesichert sein — sonst könnte eine
+  // unerledigte Belagerung unsichtbar und damit unlösbar werden.
   if(game.northFrontResolved) return;
+  const castlesDone = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
   const offensiveDone = game.offensive.camps.every(c=>c.cleared);
   const fieldCampDone = game.fieldCamp.destroyed;
-  if(!(offensiveDone && fieldCampDone)) return;
+  if(!(castlesDone && offensiveDone && fieldCampDone)) return;
   game.northFrontResolved = true;
   game.gold += 1500;
   queueModal('Für deine Dienste gewährt dir der König 1500 Gold. Nutze sie weise und diene weiter dem Königreich. Bald kommt die Zeit, den Krieg zum Feind zu tragen!');
@@ -2862,7 +2871,8 @@ function renderWorldScreen(){
     + '<div class="action-row" style="justify-content:center;margin-top:12px;"><button data-action="open-shop">Shop besuchen</button><button data-action="open-camp">Camp</button></div>'
     + '</div></div>';
 
-  if(!game.northFrontResolved){
+  const castlesTrulySecure = game.world.activeCastle >= game.world.castles.length && game.world.castles.every(c=>!c.fallen);
+  if(!game.northFrontResolved || !castlesTrulySecure){
     if(game.offensive.unlocked){
       html += renderDependencyTree();
     } else {
