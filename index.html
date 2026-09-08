@@ -67,10 +67,10 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 .roster-card .badge.weapon-SPEER{border-color:#a7c98f;color:#a7c98f;}
 .roster-card .badge.weapon-MAGIE{border-color:#a78bc9;color:#a78bc9;}
 .portrait-wrap{flex:0 0 46%;border-radius:6px;overflow:hidden;position:relative;border:1px solid var(--line-soft);background:#111528;align-self:stretch;min-height:78px;}
-.portrait-img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;}
+.portrait-img{width:100%;height:100%;object-fit:cover;object-position:center top;display:block;position:absolute;inset:0;}
 .portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:26px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
 .modal-portrait{width:88px;height:88px;border-radius:50%;overflow:hidden;margin:0 auto 14px;position:relative;border:2px solid var(--gold-dim);background:#111528;}
-.modal-portrait-img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;}
+.modal-portrait-img{width:100%;height:100%;object-fit:cover;object-position:center top;display:block;position:absolute;inset:0;}
 .modal-portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:26px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
 .statline{display:flex;gap:8px;font-size:11px;color:var(--text-dim);margin-top:4px;flex-wrap:wrap;}
 .statline-compact{display:flex;gap:8px;font-size:11px;color:var(--text-dim);margin-top:4px;flex-wrap:wrap;}
@@ -146,6 +146,9 @@ canvas{display:block;border-radius:2px;}
 .battle-log{max-height:150px;overflow-y:auto;font-size:12px;color:var(--text-dim);}
 .battle-log .entry{margin-bottom:4px;border-left:2px solid var(--line-soft);padding-left:6px;}
 .action-row{display:flex;gap:8px;flex-wrap:wrap;}
+.potion-row{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px;}
+.potion-pair{display:flex;align-items:center;justify-content:space-between;gap:14px;flex:1;min-width:240px;background:var(--panel);border:1px solid var(--line-soft);border-radius:4px;padding:8px 12px;}
+.potion-stock-row{display:grid;grid-template-columns:1fr auto 1fr auto;gap:10px;font-size:13px;color:var(--text-dim);padding:4px 2px;}
 .result-overlay{position:absolute;inset:0;background:rgba(6,8,16,.85);display:flex;align-items:center;justify-content:center;border-radius:4px;}
 .result-box{background:var(--panel);border:1px solid var(--gold);border-radius:6px;padding:26px 34px;text-align:center;}
 .result-box.victory{border-color:var(--success);}
@@ -696,12 +699,29 @@ function saveGameToSlot(slot){
   }
   render();
 }
+function normalizeGameState(g){
+  // Migration für Spielstände aus älteren Versionen, denen neuere Felder (z.B. große Tränke) fehlen.
+  if(!g) return g;
+  g.pool = g.pool || {};
+  ['healPotions','manaPotions','healPotionsLarge','manaPotionsLarge'].forEach(k=>{
+    if(typeof g.pool[k] !== 'number' || isNaN(g.pool[k])) g.pool[k] = 0;
+  });
+  const allUnits = [...(g.mercs||[])];
+  if(g.firstAlly && g.firstAlly.unit) allUnits.push(g.firstAlly.unit);
+  if(g.secondAlly && g.secondAlly.unit) allUnits.push(g.secondAlly.unit);
+  allUnits.forEach(u=>{
+    ['healPotions','manaPotions','healPotionsLarge','manaPotionsLarge'].forEach(k=>{
+      if(typeof u[k] !== 'number' || isNaN(u[k])) u[k] = 0;
+    });
+  });
+  return g;
+}
 function loadGameFromSlot(slot){
   try{
     const raw = localStorage.getItem(SAVE_KEY_PREFIX+slot);
     if(!raw) return;
     const data = JSON.parse(raw);
-    game = data.game;
+    game = normalizeGameState(data.game);
     battle = null; pendingLocation = null; modalQueue.length = 0;
     screen = 'world';
     logMsg(`Spielstand aus Slot ${slot} geladen (gespeichert: ${data.savedAt}).`);
@@ -2303,12 +2323,18 @@ function renderShopScreen(){
     </div><div class="help-text">Der Level des Kaufsöldners entspricht dem schwächsten Charakter der Party${weakest?' (aktuell Level '+weakest.level+(weakest.promoted?', befördert':'')+')':''}. Ab Level 20 (nach Beförderung) steigt der Preis auf 3000 Gold.</div></div>`;
   }
 
-  html += `<div class="panel-box"><h3>Tränke</h3><div class="action-row">
-    <button data-action="buy-potion" data-potion="healPotions" ${game.gold<POTION_CONFIG.healPotions.price?'disabled':''}>Heiltrank +5 HP kaufen (${POTION_CONFIG.healPotions.price} Gold)</button>
-    <button data-action="buy-potion" data-potion="manaPotions" ${game.gold<POTION_CONFIG.manaPotions.price?'disabled':''}>Manatrank +5 MP kaufen (${POTION_CONFIG.manaPotions.price} Gold)</button>
-    <button data-action="buy-potion" data-potion="healPotionsLarge" ${game.gold<POTION_CONFIG.healPotionsLarge.price?'disabled':''}>Großer Heiltrank +25 HP kaufen (${POTION_CONFIG.healPotionsLarge.price} Gold)</button>
-    <button data-action="buy-potion" data-potion="manaPotionsLarge" ${game.gold<POTION_CONFIG.manaPotionsLarge.price?'disabled':''}>Großer Manatrank +25 MP kaufen (${POTION_CONFIG.manaPotionsLarge.price} Gold)</button>
-  </div><div class="help-text">Im Lager: ${game.pool.healPotions} Heiltränke, ${game.pool.manaPotions} Manatränke, ${game.pool.healPotionsLarge} große Heiltränke, ${game.pool.manaPotionsLarge} große Manatränke. Manatränke können nur von Magiern genutzt werden. Zuordnung zu Charakteren im Camp.</div></div>`;
+  html += `<div class="panel-box"><h3>Tränke</h3>`;
+  html += `<div class="potion-row">
+    <div class="potion-pair"><span>Heiltrank (+5 HP)</span><button data-action="buy-potion" data-potion="healPotions" ${game.gold<POTION_CONFIG.healPotions.price?'disabled':''}>Kaufen (${POTION_CONFIG.healPotions.price} Gold)</button></div>
+    <div class="potion-pair"><span>Großer Heiltrank (+25 HP)</span><button data-action="buy-potion" data-potion="healPotionsLarge" ${game.gold<POTION_CONFIG.healPotionsLarge.price?'disabled':''}>Kaufen (${POTION_CONFIG.healPotionsLarge.price} Gold)</button></div>
+  </div>`;
+  html += `<div class="potion-row">
+    <div class="potion-pair"><span>Manatrank (+5 MP)</span><button data-action="buy-potion" data-potion="manaPotions" ${game.gold<POTION_CONFIG.manaPotions.price?'disabled':''}>Kaufen (${POTION_CONFIG.manaPotions.price} Gold)</button></div>
+    <div class="potion-pair"><span>Großer Manatrank (+25 MP)</span><button data-action="buy-potion" data-potion="manaPotionsLarge" ${game.gold<POTION_CONFIG.manaPotionsLarge.price?'disabled':''}>Kaufen (${POTION_CONFIG.manaPotionsLarge.price} Gold)</button></div>
+  </div>`;
+  html += `<div class="potion-stock-row"><span>Heiltrank</span><span>${game.pool.healPotions}</span><span>Große Heiltränke</span><span>${game.pool.healPotionsLarge}</span></div>`;
+  html += `<div class="potion-stock-row"><span>Manatrank</span><span>${game.pool.manaPotions}</span><span>Große Manatränke</span><span>${game.pool.manaPotionsLarge}</span></div>`;
+  html += `<div class="help-text" style="margin-top:6px;">Manatränke können nur von Magiern genutzt werden. Zuordnung zu Charakteren im Camp.</div></div>`;
 
   html += `<div class="panel-box"><h3>Waffen</h3>`;
   ['SCHWERT','AXT','SPEER'].forEach(wt=>{
