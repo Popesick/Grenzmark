@@ -159,17 +159,22 @@ canvas{display:block;border-radius:2px;}
 .camp-weapon-section{margin-top:auto;padding-top:6px;}
 .result-overlay{position:absolute;inset:0;background:rgba(6,8,16,.85);display:flex;align-items:center;justify-content:center;border-radius:4px;}
 .confrontation-overlay{position:absolute;inset:0;background:rgba(6,8,16,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:4px;padding:16px;gap:14px;}
-.confrontation-box{display:flex;align-items:center;justify-content:center;gap:0;width:100%;max-width:520px;}
-.confrontation-side{flex:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;min-width:0;}
+.confrontation-box{display:flex;align-items:center;justify-content:center;gap:16px;width:100%;max-width:600px;}
+.confrontation-side{flex:0 0 140px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;min-width:0;}
 .confrontation-portrait{width:96px;height:96px;border-radius:50%;overflow:hidden;position:relative;border:2px solid var(--gold-dim);background:#111528;}
 .confrontation-portrait-img{width:100%;height:100%;object-fit:cover;object-position:center top;display:block;position:absolute;inset:0;}
 .confrontation-portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:22px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
 .confrontation-name{font-family:'Cinzel',serif;color:var(--gold);font-size:14px;margin-top:4px;}
 .confrontation-weapon{font-size:12px;color:var(--text-dim);}
-.confrontation-stats{font-size:11px;color:var(--text-dim);}
-.confrontation-arrows{flex:0 0 60px;display:flex;align-items:center;justify-content:center;}
+.confrontation-center{flex:1;display:flex;flex-direction:column;align-items:center;gap:10px;min-width:180px;}
+.confrontation-arrows{display:flex;align-items:center;justify-content:center;height:24px;}
 .confrontation-arrow-left{width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-left:24px solid var(--gold);margin-right:-6px;}
 .confrontation-arrow-right{width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-right:24px solid var(--danger);margin-left:-6px;}
+.confrontation-stats-table{width:100%;display:flex;flex-direction:column;gap:5px;}
+.stat-vs-row{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;font-size:13px;color:var(--text);}
+.stat-vs-row .left{text-align:right;}
+.stat-vs-row .right{text-align:left;}
+.stat-vs-row .label{font-family:'Cinzel',serif;font-size:11px;color:var(--gold);text-align:center;}
 .confrontation-actions{display:flex;gap:10px;}
 .confrontation-result{max-width:420px;max-height:140px;overflow-y:auto;text-align:center;}
 .confrontation-result h3{margin:0 0 6px;color:var(--gold);font-family:'Cinzel',serif;font-size:14px;}
@@ -710,6 +715,25 @@ function hireMercenary(){
   const merc = createLeveledMerc(Math.max(1,weakest.level), usedNames);
   game.mercs.push(merc);
   logMsg(`${merc.name} (Level ${merc.level}) wird für ${price} Gold als Söldner angeworben.`);
+}
+function trainTroops(){
+  getActivePlayerRoster().forEach(u=>{
+    const gain = randInt(10,30);
+    applyXP(u, gain);
+    logMsg(`${u.name} trainiert und erhält ${gain} EXP.`);
+  });
+  const siegeGain = game.world.villageReinforcementsSent ? randInt(15,20) : randInt(25,34);
+  advanceCastleSiege(siegeGain);
+  game.month++;
+  advanceVillageOccupation();
+  reactivateSupplyCamps();
+  checkNextStageTrigger();
+  attemptFieldCampCastleRaid();
+  checkNorthFrontResolved();
+  checkPassiveIncome();
+  checkGameCompleted();
+  logMsg('Ein Monat vergeht mit intensivem Training.');
+  render();
 }
 
 /* ===================== Speichern / Laden ===================== */
@@ -1512,6 +1536,10 @@ function performPlayerAttack(target){
   if(!checkAllActedAutoEnd()) render();
 }
 function startConfrontation(attacker, defender){
+  // Bilder vorab laden, damit der Wechsel auf die "agg"-Pose ohne Ruckler/Nachladen passiert.
+  const aggImg = new Image(); aggImg.src = `graphics/portraits/${slugify(attacker.name)}_agg.png`;
+  const neutralImg = new Image(); neutralImg.src = neutralPortraitPath(attacker);
+  const enemyImg = new Image(); enemyImg.src = `graphics/enemy/${defender.enemyKind==='bandit'?'bandit_gen':'soldier_gen'}.png`;
   battle.confrontation = { attacker, defender, phase:'confirm', resultLog:[] };
   render();
 }
@@ -1522,17 +1550,12 @@ function cancelConfrontation(){
 function resolveConfrontationFight(){
   const c = battle.confrontation;
   if(!c) return;
-  c.phase = 'agg';
+  const before = game.log.length;
+  resolveCombat(c.attacker, c.defender);
+  if(c.attacker.alive) c.attacker.hasActed = true;
+  c.resultLog = game.log.slice(0, Math.max(0, game.log.length-before)).slice().reverse();
+  c.phase = 'result';
   render();
-  setTimeout(()=>{
-    if(!battle || !battle.confrontation) return;
-    const before = game.log.length;
-    resolveCombat(c.attacker, c.defender);
-    if(c.attacker.alive) c.attacker.hasActed = true;
-    c.resultLog = game.log.slice(0, Math.max(0, game.log.length-before)).slice().reverse();
-    c.phase = 'result';
-    render();
-  }, 550);
 }
 function closeConfrontation(){
   battle.confrontation = null;
@@ -2226,19 +2249,24 @@ function renderConfrontationOverlay(){
   html += `<div class="confrontation-portrait">${confrontationPlayerImgHtml(attacker, atkPose)}</div>`;
   html += `<div class="confrontation-name">${attacker.name}</div>`;
   html += `<div class="confrontation-weapon">${attacker.isMage?'Magie':WEAPON_NAME[attacker.weapon]}</div>`;
-  html += `<div class="confrontation-stats">HP ${Math.max(0,attacker.hp)}/${attacker.maxHp} · ANG ${attacker.atk} · VER ${attacker.def} · GES ${attacker.spd}</div>`;
   html += '</div>';
 
+  html += '<div class="confrontation-center">';
   html += `<div class="confrontation-arrows">
     <div class="confrontation-arrow-left" style="border-left-width:${leftW}px;"></div>
     <div class="confrontation-arrow-right" style="border-right-width:${rightW}px;"></div>
   </div>`;
+  html += '<div class="confrontation-stats-table">';
+  html += `<div class="stat-vs-row"><span class="left">${Math.max(0,attacker.hp)}/${attacker.maxHp}</span><span class="label">HP</span><span class="right">${Math.max(0,defender.hp)}/${defender.maxHp}</span></div>`;
+  html += `<div class="stat-vs-row"><span class="left">${attacker.atk}</span><span class="label">ANG</span><span class="right">${defender.atk}</span></div>`;
+  html += `<div class="stat-vs-row"><span class="left">${attacker.def}</span><span class="label">VER</span><span class="right">${defender.def}</span></div>`;
+  html += `<div class="stat-vs-row"><span class="left">${attacker.spd}</span><span class="label">GES</span><span class="right">${defender.spd}</span></div>`;
+  html += '</div></div>'; // confrontation-stats-table, confrontation-center
 
   html += '<div class="confrontation-side">';
   html += `<div class="confrontation-portrait">${confrontationEnemyImgHtml(defender)}</div>`;
   html += `<div class="confrontation-name">${defender.name}</div>`;
   html += `<div class="confrontation-weapon">${defender.isMage?'Magie':WEAPON_NAME[defender.weapon]}</div>`;
-  html += `<div class="confrontation-stats">HP ${Math.max(0,defender.hp)}/${defender.maxHp} · ANG ${defender.atk} · VER ${defender.def} · GES ${defender.spd}</div>`;
   html += '</div>';
   html += '</div>'; // confrontation-box
 
@@ -2247,8 +2275,6 @@ function renderConfrontationOverlay(){
       <button class="primary" data-action="confrontation-fight">Kampf austragen</button>
       <button data-action="confrontation-cancel">Abbrechen</button>
     </div>`;
-  } else if(phase==='agg'){
-    html += `<div class="confrontation-actions"><div class="help-text">Der Kampf entbrennt …</div></div>`;
   } else if(phase==='result'){
     html += `<div class="confrontation-result"><h3>Ergebnis</h3>`;
     c.resultLog.forEach(l=> html += `<div class="entry">${l}</div>`);
@@ -2504,6 +2530,9 @@ function campPotionPairHtml(u, label, kind){
 }
 function renderCampScreen(){
   let html = '<div class="map-region"><h2>Camp <span class="hint">Ausrüstung zuordnen · 💰 '+game.gold+' Gold · Lager: '+game.pool.healPotions+' Heiltränke, '+game.pool.manaPotions+' Manatränke, '+game.pool.healPotionsLarge+' große Heiltränke, '+game.pool.manaPotionsLarge+' große Manatränke</span></h2></div>';
+  html += `<div class="panel-box"><h3>Trainingslager</h3><div class="action-row">
+    <button data-action="train-troops">Trainieren (1 Monat)</button>
+  </div><div class="help-text">Die gesamte Truppe erhält 10-30 EXP. Ein Monat vergeht dabei wie nach einem Einsatz — Belagerung, Dorf-Ereignisse und Einnahmen laufen normal weiter.</div></div>`;
   const roster = getActivePlayerRoster();
   roster.forEach(u=>{
     const hpPct = Math.max(0, Math.round((u.hp/u.maxHp)*100));
@@ -2908,6 +2937,7 @@ function attachHandlers(){
       else if(action==='back-to-world'){ screen='world'; render(); }
       else if(action==='buy-potion'){ buyPotion(el.getAttribute('data-potion')); render(); }
       else if(action==='hire-mercenary'){ hireMercenary(); render(); }
+      else if(action==='train-troops'){ trainTroops(); }
       else if(action==='buy-weapon'){ buyWeaponTier(el.getAttribute('data-weapon'), el.getAttribute('data-tier')); render(); }
       else if(action==='buy-armor'){ buyArmorTier(el.getAttribute('data-tier')); render(); }
       else if(action==='equip-weapon'){ const u=findUnitById(el.getAttribute('data-id')); if(u) setWeaponTier(u, el.getAttribute('data-tier')); render(); }
