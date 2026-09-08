@@ -158,6 +158,22 @@ canvas{display:block;border-radius:2px;}
 .camp-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
 .camp-weapon-section{margin-top:auto;padding-top:6px;}
 .result-overlay{position:absolute;inset:0;background:rgba(6,8,16,.85);display:flex;align-items:center;justify-content:center;border-radius:4px;}
+.confrontation-overlay{position:absolute;inset:0;background:rgba(6,8,16,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:4px;padding:16px;gap:14px;}
+.confrontation-box{display:flex;align-items:center;justify-content:center;gap:0;width:100%;max-width:520px;}
+.confrontation-side{flex:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;min-width:0;}
+.confrontation-portrait{width:96px;height:96px;border-radius:50%;overflow:hidden;position:relative;border:2px solid var(--gold-dim);background:#111528;}
+.confrontation-portrait-img{width:100%;height:100%;object-fit:cover;object-position:center top;display:block;position:absolute;inset:0;}
+.confrontation-portrait-fallback{width:100%;height:100%;display:none;align-items:center;justify-content:center;font-family:'Cinzel',serif;font-size:22px;color:var(--gold);background:linear-gradient(135deg,#2a3358,#1c2440);position:absolute;inset:0;}
+.confrontation-name{font-family:'Cinzel',serif;color:var(--gold);font-size:14px;margin-top:4px;}
+.confrontation-weapon{font-size:12px;color:var(--text-dim);}
+.confrontation-stats{font-size:11px;color:var(--text-dim);}
+.confrontation-arrows{flex:0 0 60px;display:flex;align-items:center;justify-content:center;}
+.confrontation-arrow-left{width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-left:24px solid var(--gold);margin-right:-6px;}
+.confrontation-arrow-right{width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-right:24px solid var(--danger);margin-left:-6px;}
+.confrontation-actions{display:flex;gap:10px;}
+.confrontation-result{max-width:420px;max-height:140px;overflow-y:auto;text-align:center;}
+.confrontation-result h3{margin:0 0 6px;color:var(--gold);font-family:'Cinzel',serif;font-size:14px;}
+.confrontation-result .entry{font-size:12px;color:var(--text-dim);margin-bottom:3px;}
 .result-box{background:var(--panel);border:1px solid var(--gold);border-radius:6px;padding:26px 34px;text-align:center;}
 .result-box.victory{border-color:var(--success);}
 .result-box.defeat{border-color:var(--danger);}
@@ -301,8 +317,10 @@ let useSprites = true; // Grafik- vs. Icon-Darstellung auf der Kampfkarte
 function toggleSprites(){ useSprites = !useSprites; render(); }
 let showTutorial = true; // Ein-/Ausblenden der Tutorial-/Hilfe-Boxen im Kampf
 function toggleTutorial(){ showTutorial = !showTutorial; render(); }
+let showBattleScreenOverlay = true; // Konfrontations-Fenster bei Nahkampfangriffen des Spielers
+function toggleBattleScreenOverlay(){ showBattleScreenOverlay = !showBattleScreenOverlay; render(); }
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
-const GAME_VERSION = '0.3.1'; // Trigger-Fix, Feldlager-Überfälle auf gesicherte Burgen, Joric-Aufstiegswahl, Speicherfixe
+const GAME_VERSION = '0.3.4'; // Konfrontations-Kampfscreen, Camp-/Inventar-Feinschliff
 const MONTH_NAMES = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
 function formatDate(monthIndex){
   const total = 9 + monthIndex; // Start: Oktober (Index 9) 503
@@ -1177,7 +1195,7 @@ function generateBattle(loc){
     phase:'player', mode:'idle', selected:null, moveRange:null, attackRange:null,
     turnNumber:1, enemyIdx:0, outcome:null, lastAttackerId:null,
     deploying:true, deploySelected:null, castingSpell:null,
-    damagePopups:[], inspecting:null, inspectRange:null, showInventory:false
+    damagePopups:[], inspecting:null, inspectRange:null, showInventory:false, confrontation:null
   };
 }
 
@@ -1479,6 +1497,7 @@ function attackFromCurrentPosition(target){
   const u = battle.selected;
   u.hasMoved=true;
   battle.moveRange=null;
+  if(showBattleScreenOverlay){ startConfrontation(u, target); return; }
   resolveCombat(u, target);
   if(u.alive) u.hasActed=true;
   if(!battle.outcome){ battle.selected=null; battle.attackRange=null; battle.mode='idle'; }
@@ -1486,8 +1505,37 @@ function attackFromCurrentPosition(target){
 }
 function performPlayerAttack(target){
   const u=battle.selected;
+  if(showBattleScreenOverlay){ startConfrontation(u, target); return; }
   resolveCombat(u,target);
   if(u.alive) u.hasActed=true;
+  if(!battle.outcome){ battle.selected=null; battle.attackRange=null; battle.mode='idle'; }
+  if(!checkAllActedAutoEnd()) render();
+}
+function startConfrontation(attacker, defender){
+  battle.confrontation = { attacker, defender, phase:'confirm', resultLog:[] };
+  render();
+}
+function cancelConfrontation(){
+  battle.confrontation = null;
+  render();
+}
+function resolveConfrontationFight(){
+  const c = battle.confrontation;
+  if(!c) return;
+  c.phase = 'agg';
+  render();
+  setTimeout(()=>{
+    if(!battle || !battle.confrontation) return;
+    const before = game.log.length;
+    resolveCombat(c.attacker, c.defender);
+    if(c.attacker.alive) c.attacker.hasActed = true;
+    c.resultLog = game.log.slice(0, Math.max(0, game.log.length-before)).slice().reverse();
+    c.phase = 'result';
+    render();
+  }, 550);
+}
+function closeConfrontation(){
+  battle.confrontation = null;
   if(!battle.outcome){ battle.selected=null; battle.attackRange=null; battle.mode='idle'; }
   if(!checkAllActedAutoEnd()) render();
 }
@@ -2148,6 +2196,67 @@ function portraitImgHtml(u, imgClass, fallbackClass){
       onerror="var f=this.dataset.fallback; if(f){ this.dataset.fallback=''; this.src=f; } else { this.style.display='none'; this.nextElementSibling.style.display='flex'; }">
     <div class="${fallbackClass}">${initials(u.name)}</div>`;
 }
+function confrontationPlayerImgHtml(u, pose){
+  const statePath = `graphics/portraits/${slugify(u.name)}_${pose}.png`;
+  const neutralPath = neutralPortraitPath(u);
+  return `<img class="confrontation-portrait-img" src="${statePath}" data-fallback="${neutralPath}" alt=""
+      onerror="var f=this.dataset.fallback; if(f){ this.dataset.fallback=''; this.src=f; } else { this.style.display='none'; this.nextElementSibling.style.display='flex'; }">
+    <div class="confrontation-portrait-fallback">${initials(u.name)}</div>`;
+}
+function confrontationEnemyImgHtml(enemy){
+  const path = `graphics/enemy/${enemy.enemyKind==='bandit' ? 'bandit_gen' : 'soldier_gen'}.png`;
+  return `<img class="confrontation-portrait-img" src="${path}" alt=""
+      onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+    <div class="confrontation-portrait-fallback">${initials(enemy.name)}</div>`;
+}
+function renderConfrontationOverlay(){
+  const c = battle.confrontation;
+  if(!c) return '';
+  const { attacker, defender, phase } = c;
+  const atkPose = phase==='confirm' ? 'ver' : 'agg';
+  const atkPower = Math.max(1, attacker.atk - defender.def);
+  const defPower = Math.max(1, defender.atk - attacker.def);
+  const total = atkPower+defPower;
+  const atkPct = Math.round(atkPower/total*100);
+  const leftW = Math.round(16 + atkPct*0.5);
+  const rightW = Math.round(16 + (100-atkPct)*0.5);
+
+  let html = '<div class="confrontation-overlay"><div class="confrontation-box">';
+  html += '<div class="confrontation-side">';
+  html += `<div class="confrontation-portrait">${confrontationPlayerImgHtml(attacker, atkPose)}</div>`;
+  html += `<div class="confrontation-name">${attacker.name}</div>`;
+  html += `<div class="confrontation-weapon">${attacker.isMage?'Magie':WEAPON_NAME[attacker.weapon]}</div>`;
+  html += `<div class="confrontation-stats">HP ${Math.max(0,attacker.hp)}/${attacker.maxHp} · ANG ${attacker.atk} · VER ${attacker.def} · GES ${attacker.spd}</div>`;
+  html += '</div>';
+
+  html += `<div class="confrontation-arrows">
+    <div class="confrontation-arrow-left" style="border-left-width:${leftW}px;"></div>
+    <div class="confrontation-arrow-right" style="border-right-width:${rightW}px;"></div>
+  </div>`;
+
+  html += '<div class="confrontation-side">';
+  html += `<div class="confrontation-portrait">${confrontationEnemyImgHtml(defender)}</div>`;
+  html += `<div class="confrontation-name">${defender.name}</div>`;
+  html += `<div class="confrontation-weapon">${defender.isMage?'Magie':WEAPON_NAME[defender.weapon]}</div>`;
+  html += `<div class="confrontation-stats">HP ${Math.max(0,defender.hp)}/${defender.maxHp} · ANG ${defender.atk} · VER ${defender.def} · GES ${defender.spd}</div>`;
+  html += '</div>';
+  html += '</div>'; // confrontation-box
+
+  if(phase==='confirm'){
+    html += `<div class="confrontation-actions">
+      <button class="primary" data-action="confrontation-fight">Kampf austragen</button>
+      <button data-action="confrontation-cancel">Abbrechen</button>
+    </div>`;
+  } else if(phase==='agg'){
+    html += `<div class="confrontation-actions"><div class="help-text">Der Kampf entbrennt …</div></div>`;
+  } else if(phase==='result'){
+    html += `<div class="confrontation-result"><h3>Ergebnis</h3>`;
+    c.resultLog.forEach(l=> html += `<div class="entry">${l}</div>`);
+    html += `</div><div class="confrontation-actions"><button class="primary" data-action="confrontation-close">OK</button></div>`;
+  }
+  html += '</div>'; // confrontation-overlay
+  return html;
+}
 
 function unitCardHtml(u, opts){
   opts = opts||{};
@@ -2533,7 +2642,9 @@ function renderBattleScreen(){
   html += '<div class="battle-canvas-column">';
   html += `<div id="battle-canvas-holder" style="width:${canvasPx+16}px;height:${canvasPx+16}px;">
     <canvas id="battleCanvas" width="${canvasPx}" height="${canvasPx}"></canvas>`;
-  if(battle.outcome){
+  if(battle.confrontation){
+    html += renderConfrontationOverlay();
+  } else if(battle.outcome){
     const won = battle.outcome==='victory';
     const label = won ? 'Sieg' : (battle.outcome==='retreat' ? 'Rückzug' : 'Niederlage');
     html += `<div class="result-overlay"><div class="result-box ${won?'victory':'defeat'}">
@@ -2547,6 +2658,7 @@ function renderBattleScreen(){
     <button class="zoom-btn" data-action="zoom-out" title="Kampfkarte verkleinern" ${zoomTile<=16?'disabled':''}>−</button>
     <button class="zoom-btn" data-action="zoom-in" title="Kampfkarte vergrößern" ${zoomTile>=56?'disabled':''}>+</button>
     <button class="display-toggle-btn" data-action="toggle-sprites" title="Zwischen Grafik und Icon-Darstellung wechseln">${useSprites ? '🖼 Grafik' : '⚪ Icons'}</button>
+    <button class="display-toggle-btn" data-action="toggle-battlescreen" title="Konfrontations-Fenster bei Nahkampfangriffen ein-/ausschalten">${showBattleScreenOverlay ? '⚔ Kampfscreen an' : '⚔ Kampfscreen aus'}</button>
   </div>`;
   html += '</div>'; // battle-canvas-column
   html += '<div id="battle-side">';
@@ -2757,6 +2869,10 @@ function attachHandlers(){
       else if(action==='zoom-in'){ zoomIn(); }
       else if(action==='zoom-out'){ zoomOut(); }
       else if(action==='toggle-sprites'){ toggleSprites(); }
+      else if(action==='toggle-battlescreen'){ toggleBattleScreenOverlay(); }
+      else if(action==='confrontation-fight'){ resolveConfrontationFight(); }
+      else if(action==='confrontation-cancel'){ cancelConfrontation(); }
+      else if(action==='confrontation-close'){ closeConfrontation(); }
       else if(action==='toggle-tutorial'){ toggleTutorial(); }
       else if(action==='select-loc'){
         const kind = el.getAttribute('data-kind');
