@@ -149,6 +149,14 @@ canvas{display:block;border-radius:2px;}
 .potion-row{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px;}
 .potion-pair{display:flex;align-items:center;justify-content:space-between;gap:14px;flex:1;min-width:240px;background:var(--panel);border:1px solid var(--line-soft);border-radius:4px;padding:8px 12px;}
 .potion-stock-row{display:grid;grid-template-columns:1fr auto 1fr auto;gap:10px;font-size:13px;color:var(--text-dim);padding:4px 2px;}
+.potion-controls{display:flex;align-items:center;gap:6px;}
+.potion-controls button{padding:4px 10px;}
+.potion-count{min-width:20px;text-align:center;font-size:13px;color:var(--text);}
+.camp-card{padding-bottom:14px;}
+.camp-top{display:flex;gap:16px;align-items:stretch;}
+.camp-portrait-wrap{flex:0 0 38%;position:relative;border-radius:6px;overflow:hidden;border:1px solid var(--line-soft);background:#111528;}
+.camp-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.camp-weapon-section{margin-top:auto;padding-top:6px;}
 .result-overlay{position:absolute;inset:0;background:rgba(6,8,16,.85);display:flex;align-items:center;justify-content:center;border-radius:4px;}
 .result-box{background:var(--panel);border:1px solid var(--gold);border-radius:6px;padding:26px 34px;text-align:center;}
 .result-box.victory{border-color:var(--success);}
@@ -2360,35 +2368,59 @@ function renderShopScreen(){
   return html;
 }
 
+function campPotionPairHtml(u, label, kind){
+  return `<div class="potion-pair">
+    <span>${label}</span>
+    <div class="potion-controls">
+      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="${kind}" ${game.pool[kind]<=0?'disabled':''}>+</button>
+      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="${kind}" ${u[kind]<=0?'disabled':''}>−</button>
+      <span class="potion-count">${u[kind]}</span>
+    </div>
+  </div>`;
+}
 function renderCampScreen(){
   let html = '<div class="map-region"><h2>Camp <span class="hint">Ausrüstung zuordnen · 💰 '+game.gold+' Gold · Lager: '+game.pool.healPotions+' Heiltränke, '+game.pool.manaPotions+' Manatränke, '+game.pool.healPotionsLarge+' große Heiltränke, '+game.pool.manaPotionsLarge+' große Manatränke</span></h2></div>';
   const roster = getActivePlayerRoster();
   roster.forEach(u=>{
-    html += `<div class="panel-box">${unitCardHtml(u)}`;
-    html += `<div class="statline" style="margin:8px 0 4px;">Waffe (${WEAPON_NAME[u.weapon]})</div><div class="action-row">`;
+    const hpPct = Math.max(0, Math.round((u.hp/u.maxHp)*100));
+    const xpPct = Math.min(100, u.xp);
+    const magPct = (u.isMage && u.maxMag>0) ? Math.max(0, Math.round((u.mag/u.maxMag)*100)) : 0;
+
+    html += `<div class="panel-box camp-card">`;
+    html += `<div class="camp-top">`;
+    html += `<div class="camp-portrait-wrap" title="Porträt-Pfad: ${portraitPath(u)}">${portraitImgHtml(u)}</div>`;
+    html += `<div class="camp-info">`;
+    html += `<div class="row1">
+        <span class="name">${u.name}</span>
+        <span class="badge weapon-${u.isMage?'MAGIE':u.weapon}">${u.isMage?'M':WEAPON_LETTER[u.weapon]}</span>
+      </div>
+      <div class="rank">${u.rank} · Lvl ${u.level} · ${u.isMage?'Magie':WEAPON_NAME[u.weapon]}</div>
+      <div class="statline-compact"><span>ANG ${u.atk}</span><span>VER ${u.def}</span><span>GES ${u.spd}</span></div>
+      <div class="stat-row"><span class="stat-label">HP</span><span class="stat-num">${u.hp}/${u.maxHp}</span><div class="mini-bar"><div class="mini-bar-fill hp" style="width:${hpPct}%"></div></div></div>
+      <div class="stat-row"><span class="stat-label">MP</span><span class="stat-num">${u.isMage?u.mag:0}/${u.isMage?u.maxMag:0}</span><div class="mini-bar"><div class="mini-bar-fill mp" style="width:${magPct}%"></div></div></div>
+      <div class="stat-row"><span class="stat-label">XP</span><span class="stat-num">${u.xp}/100</span><div class="mini-bar"><div class="mini-bar-fill xp" style="width:${xpPct}%"></div></div></div>`;
+    html += `<div class="camp-weapon-section"><div class="statline" style="margin:8px 0 4px;">Waffe (${WEAPON_NAME[u.weapon]})</div><div class="action-row">`;
     ['stahl','silber','elementar'].forEach(tier=>{
       const unlocked = tier==='stahl' || game.shop.weaponTiers[u.weapon][tier];
       const active = u.weaponTier===tier;
       html += `<button data-action="equip-weapon" data-id="${u.id}" data-tier="${tier}" ${(!unlocked||active)?'disabled':''} ${active?'class="primary"':''}>${WEAPON_TIER_NAME[tier]}${active?' ✓':''}</button>`;
     });
-    html += `</div>`;
-    html += `<div class="statline" style="margin:8px 0 4px;">Rüstung</div><div class="action-row">`;
+    html += `</div></div>`;
+    html += `</div>`; // camp-info
+    html += `</div>`; // camp-top
+
+    html += `<div class="statline" style="margin:12px 0 4px;">Rüstung</div><div class="action-row">`;
     ['wolle','leder','eisen','silber','elementar'].forEach(tier=>{
       const unlocked = tier==='wolle' || game.shop.armorTiers[tier];
       const active = u.armorTier===tier;
       html += `<button data-action="equip-armor" data-id="${u.id}" data-tier="${tier}" ${(!unlocked||active)?'disabled':''} ${active?'class="primary"':''}>${ARMOR_TIER_NAME[tier]}${active?' ✓':''}</button>`;
     });
     html += `</div>`;
-    html += `<div class="statline" style="margin:8px 0 4px;">Tränke</div><div class="action-row">
-      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="healPotions" ${game.pool.healPotions<=0?'disabled':''}>+ Heiltrank (${u.healPotions})</button>
-      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="healPotions" ${u.healPotions<=0?'disabled':''}>− Heiltrank</button>
-      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="healPotionsLarge" ${game.pool.healPotionsLarge<=0?'disabled':''}>+ Gr. Heiltrank (${u.healPotionsLarge})</button>
-      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="healPotionsLarge" ${u.healPotionsLarge<=0?'disabled':''}>− Gr. Heiltrank</button>
-      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="manaPotions" ${game.pool.manaPotions<=0?'disabled':''}>+ Manatrank (${u.manaPotions})</button>
-      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="manaPotions" ${u.manaPotions<=0?'disabled':''}>− Manatrank</button>
-      <button data-action="potion-to-unit" data-id="${u.id}" data-potion="manaPotionsLarge" ${game.pool.manaPotionsLarge<=0?'disabled':''}>+ Gr. Manatrank (${u.manaPotionsLarge})</button>
-      <button data-action="potion-to-pool" data-id="${u.id}" data-potion="manaPotionsLarge" ${u.manaPotionsLarge<=0?'disabled':''}>− Gr. Manatrank</button>
-    </div></div>`;
+
+    html += `<div class="statline" style="margin:12px 0 4px;">Tränke</div>`;
+    html += `<div class="potion-row">${campPotionPairHtml(u,'Heiltrank','healPotions')}${campPotionPairHtml(u,'Großer Heiltrank','healPotionsLarge')}</div>`;
+    html += `<div class="potion-row">${campPotionPairHtml(u,'Manatrank','manaPotions')}${campPotionPairHtml(u,'Großer Manatrank','manaPotionsLarge')}</div>`;
+    html += `</div>`; // panel-box camp-card
   });
   html += `<div class="panel-box"><div class="action-row"><button class="primary" data-action="back-to-world">Zurück zur Weltkarte</button></div></div>`;
   return html;
