@@ -113,8 +113,8 @@ button.danger:hover:not(:disabled){background:var(--danger-dim);}
 .tree-row .tree-node{position:relative;}
 .tree-row .tree-node::before{content:'';position:absolute;top:-16px;left:50%;width:1px;height:16px;background:var(--line);transform:translateX(-50%);}
 .tree-connector{width:1px;height:18px;background:var(--line);}
-.feldlager-cluster{display:flex;align-items:center;gap:0;}
-.feldlager-hline{width:26px;height:1px;background:var(--line);flex:0 0 auto;}
+.feldlager-stack{display:flex;flex-direction:column;align-items:center;}
+.feldlager-vline{width:1px;height:10px;background:var(--line);}
 .capital-node .n-name{font-size:16px;}
 
 /* modal */
@@ -2260,11 +2260,11 @@ function renderDependencyTree(){
   if(game.fieldCamp.destroyed) feldlagerNodeHtml = `<div class="node success"><div class="n-name">Feldlager</div><div class="n-state">Zerstört</div></div>`;
   else feldlagerNodeHtml = `<div class="node clickable danger" data-action="select-loc" data-kind="feldlager" data-idx="0"><div class="n-name">Feldlager</div><div class="n-state">Einsatzort verfügbar</div></div>`;
 
-  html += '<div class="tree-row"><div class="feldlager-cluster">';
-  if(scoutNodeHtml){
-    html += `<div class="scout-node">${scoutNodeHtml}</div><div class="feldlager-hline"></div>`;
-  }
+  html += '<div class="tree-row"><div class="feldlager-stack">';
   html += `<div class="tree-node">${feldlagerNodeHtml}</div>`;
+  if(scoutNodeHtml){
+    html += `<div class="feldlager-vline"></div>${scoutNodeHtml}`;
+  }
   html += '</div></div><div class="tree-connector"></div>';
 
   html += '<div class="tree-row multi">';
