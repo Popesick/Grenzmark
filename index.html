@@ -333,7 +333,7 @@ function toggleTutorial(){ showTutorial = !showTutorial; render(); }
 let showBattleScreenOverlay = true; // Konfrontations-Fenster bei Nahkampfangriffen des Spielers
 function toggleBattleScreenOverlay(){ showBattleScreenOverlay = !showBattleScreenOverlay; render(); }
 const GRID_SIZE = 14; // Prototyp-Standard (Spec-Default 25x25, hier verkleinert & weiterhin konfigurierbar)
-const GAME_VERSION = '0.4.0'; // Akt 3: Feldzug gegen die Grafschaft Demeron (Isara, Grenzburg, Trio, Belagerungsdruck, Düsterkuppel, Kopf der Schlange)
+const GAME_VERSION = '0.4.1'; // Isara-Stat-Fix, Nordgrenze-Sichtbarkeits-Fix, Missionssystem im Camp
 const MONTH_NAMES = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
 function formatDate(monthIndex){
   const total = 9 + monthIndex; // Start: Oktober (Index 9) 503
@@ -498,7 +498,7 @@ function randomName(usedSet){
 function bpForSpeed(spd){ return 8 + Math.floor(spd/10); }
 
 function baseEquipFields(){
-  return { weaponTier:'stahl', armorTier:'wolle', equipBonusApplied:{atk:0,def:0,spd:0}, healPotions:1, manaPotions:0, healPotionsLarge:0, manaPotionsLarge:0 };
+  return { weaponTier:'stahl', armorTier:'wolle', equipBonusApplied:{atk:0,def:0,spd:0}, healPotions:1, manaPotions:0, healPotionsLarge:0, manaPotionsLarge:0, onMission:false, missionReturnMonth:null };
 }
 function makeMerc(id, usedNames, forcedWeapon){
   const weapon = forcedWeapon || ['SCHWERT','AXT','SPEER'][randInt(0,2)];
@@ -556,6 +556,7 @@ let game = null;
 let screen = 'intro'; // 'intro' | 'world' | 'confirm' | 'battle' | 'squad'
 let pendingLocation = null;
 let squadPick = null; // { selectedIds:Set } — Trupp-Auswahl, wenn Roster > MAX_SQUAD_SIZE
+let missionPick = new Set(); // Auswahl für "Auf Mission schicken" im Camp
 const MAX_SQUAD_SIZE = 8;
 let battle = null;
 let modalQueue = []; // Warteschlange für Dialogboxen (neue Kämpfer, Aufträge, Erfolg)
@@ -582,6 +583,7 @@ function initGame(){
     excludedMageName: excludedCandidate,
     gold: 0,
     villageIncomeAnnounced:false, castleIncomeAnnounced:false, completed:false, northFrontResolved:false,
+    missions:[],
     pool: { healPotions:0, manaPotions:0, healPotionsLarge:0, manaPotionsLarge:0 },
     shop: {
       weaponTiers: { SCHWERT:{silber:false,elementar:false}, AXT:{silber:false,elementar:false}, SPEER:{silber:false,elementar:false} },
@@ -718,14 +720,20 @@ function grantSecondAlly(){
     queueModal(`Nachdem sich der Staub des Kampfes gelegt hat, tritt eine Frau aus dem Schatten. Ysolde ist eine Banditenkriegerin und will sich euerer Gemeinschaft anschließen.`, null, 'dismiss', a.unit);
   }
 }
+function getFullPlayerRoster(){
+  const list=[...game.mercs];
+  if(game.firstAlly.joined) list.push(game.firstAlly.unit);
+  if(game.secondAlly.joined) list.push(game.secondAlly.unit);
+  return list;
+}
 function getActivePlayerRoster(){
   const list=[...game.mercs];
   if(game.firstAlly.joined && game.firstAlly.active) list.push(game.firstAlly.unit);
   if(game.secondAlly.joined) list.push(game.secondAlly.unit);
-  return list;
+  return list.filter(u=>!u.onMission);
 }
 function findUnitById(id){
-  return getActivePlayerRoster().find(u=>u.id===id);
+  return getFullPlayerRoster().find(u=>u.id===id);
 }
 function effectiveLevel(u){ return u.promoted ? u.level+20 : u.level; }
 function xpMultiplier(attacker, defender){
@@ -780,10 +788,64 @@ function trainTroops(){
   checkNextStageTrigger();
   attemptFieldCampCastleRaid();
   checkNorthFrontResolved();
+  checkMissionReturns();
   checkPassiveIncome();
   checkGameCompleted();
   logMsg('Ein Monat vergeht mit intensivem Training.');
   render();
+}
+
+/* ===================== Missionen (Camp) ===================== */
+function missionGoldBias(t){
+  // t in [0,1] (Level-Anteil): symmetrische Verzerrung von "fast immer niedrig" (t=0)
+  // zu "fast immer hoch" (t=1) über die Mitte (t=0.5 = gleichverteilt).
+  const exponent = Math.pow(9, 1-2*t);
+  return Math.pow(Math.random(), exponent);
+}
+function sendOnMission(unitIds){
+  const units = unitIds.map(id=>findUnitById(id)).filter(Boolean);
+  if(units.length<2) return;
+  const dRoll = Math.random();
+  const duration = dRoll<0.2 ? 3 : dRoll<0.4 ? 4 : dRoll<0.7 ? 5 : 6;
+  const avgLevel = units.reduce((a,u)=>a+effectiveLevel(u),0)/units.length;
+  const t = Math.max(0, Math.min(1, (avgLevel-1)/39));
+  let gold = Math.round(300 + missionGoldBias(t)*700);
+  const extra = Math.max(0, units.length-2);
+  for(let i=0;i<extra;i++) gold += randInt(150,500);
+  const expPerUnit = {};
+  const returnMonth = game.month + duration;
+  units.forEach(u=>{
+    expPerUnit[u.id] = randInt(100,250);
+    u.onMission = true;
+    u.missionReturnMonth = returnMonth;
+  });
+  game.missions.push({ unitIds: units.map(u=>u.id), returnMonth, expPerUnit, goldTotal: gold });
+  logMsg(`${units.map(u=>u.name).join(', ')} brechen zu einer ${duration}-monatigen Mission auf.`);
+  render();
+}
+function checkMissionReturns(){
+  if(!game.missions || !game.missions.length) return;
+  const stillOut = [];
+  game.missions.forEach(m=>{
+    if(game.month >= m.returnMonth){
+      const names=[];
+      m.unitIds.forEach(id=>{
+        const u = findUnitById(id);
+        if(u){
+          u.onMission=false; u.missionReturnMonth=null;
+          const exp = m.expPerUnit[id]||0;
+          applyXP(u, exp);
+          names.push(`${u.name} (+${exp} EXP)`);
+        }
+      });
+      game.gold += m.goldTotal;
+      logMsg(`Mission abgeschlossen: ${names.join(', ')} kehren zurück, +${m.goldTotal} Gold.`);
+      queueModal(`${names.join(', ')} kehren von ihrer Mission zurück und bringen ${m.goldTotal} Gold mit.`);
+    } else {
+      stillOut.push(m);
+    }
+  });
+  game.missions = stillOut;
 }
 
 /* ===================== Speichern / Laden ===================== */
@@ -806,6 +868,7 @@ function normalizeGameState(g){
   ['healPotions','manaPotions','healPotionsLarge','manaPotionsLarge'].forEach(k=>{
     if(typeof g.pool[k] !== 'number' || isNaN(g.pool[k])) g.pool[k] = 0;
   });
+  g.missions = g.missions || [];
   const allUnits = [...(g.mercs||[])];
   if(g.firstAlly && g.firstAlly.unit) allUnits.push(g.firstAlly.unit);
   if(g.secondAlly && g.secondAlly.unit) allUnits.push(g.secondAlly.unit);
@@ -813,6 +876,8 @@ function normalizeGameState(g){
     ['healPotions','manaPotions','healPotionsLarge','manaPotionsLarge'].forEach(k=>{
       if(typeof u[k] !== 'number' || isNaN(u[k])) u[k] = 0;
     });
+    if(typeof u.onMission !== 'boolean') u.onMission = false;
+    if(u.missionReturnMonth===undefined) u.missionReturnMonth = null;
   });
   return g;
 }
@@ -855,14 +920,17 @@ function createLeveledMerc(level, usedNames){
     ...baseEquipFields()
   };
 }
-function createLeveledMageMerc(id, name, gender, level, promoted, magePath){
+function createLeveledMageMerc(id, name, gender, effLevel, promoted, magePath){
+  // effLevel = das VOLLE effektive Level (bei Beförderten bereits inkl. +20), bestimmt die
+  // Stat-Skalierung. Das angezeigte Level wird bei Beförderten korrekt zurückgesetzt.
   const weapon = ['SCHWERT','AXT','SPEER'][randInt(0,2)];
-  const bonus = level-1;
+  const bonus = Math.max(0, effLevel-1);
+  const displayLevel = promoted ? Math.max(1, effLevel-20) : effLevel;
   const maxHp = randInt(15,25)+bonus*3;
-  const maxMag = randInt(11,19)+bonus*2;
+  const maxMag = randInt(11,19)+Math.round(bonus*1.5);
   return {
     id, name, gender, team:'player', isAlly:false, isMage:true,
-    weapon, level, rank: promoted ? (magePath==='erzmagier'?'Erzmagier':'Nekromant') : 'Magier',
+    weapon, level:displayLevel, rank: promoted ? (magePath==='erzmagier'?'Erzmagier':'Nekromant') : 'Magier',
     promoted: !!promoted, magePath: promoted ? magePath : undefined,
     atk:randInt(1,10)+bonus, def:randInt(1,10)+bonus, spd:randInt(1,10)+bonus, mag:maxMag, maxMag,
     maxHp, hp:maxHp, xp:0,
@@ -947,12 +1015,11 @@ function recruitIsara(){
   const jEff = effectiveLevel(game.mercs.find(m=>m.isMage) || {level:1,promoted:false});
   const herEff = Math.max(1, jEff-3);
   const promoted = herEff>20;
-  const level = promoted ? Math.max(1, herEff-20) : herEff;
   const joric = game.mercs.find(m=>m.isMage);
   const magePath = (joric && joric.magePath==='erzmagier') ? 'nekromant' : 'erzmagier';
-  const isara = createLeveledMageMerc('isara', 'Isara', 'w', level, promoted, magePath);
+  const isara = createLeveledMageMerc('isara', 'Isara', 'w', herEff, promoted, magePath);
   game.mercs.push(isara);
-  logMsg(`Isara schließt sich als Magierin der Truppe an (Level ${level}${promoted?', '+isara.rank:''}).`);
+  logMsg(`Isara schließt sich als Magierin der Truppe an (Level ${isara.level}${promoted?', '+isara.rank:''}).`);
   queueModal(`Isara, die Magierin des Königs, schließt sich eurer Truppe an. Sie ist ${promoted ? 'bereits '+isara.rank : 'noch keine Erzmagierin, aber mächtig'} und wird euch auf dem Feldzug gegen Demeron begleiten.`, null, 'dismiss', isara);
 }
 function checkTrioCompleted(){
@@ -2525,6 +2592,7 @@ function endBattle(outcome){
   checkCastleRecapture();
   checkDuesterkuppelExpiry();
   checkAllyPermanent();
+  checkMissionReturns();
   checkPassiveIncome();
   checkGameCompleted();
   battle=null; screen='world'; pendingLocation=null;
@@ -3151,11 +3219,30 @@ function campPotionPairHtml(u, label, kind){
     </div>
   </div>`;
 }
+function renderMissionSection(){
+  const away = getFullPlayerRoster().filter(u=>u.onMission);
+  const available = getActivePlayerRoster();
+  let html = '<div class="panel-box"><h3>Auf Mission schicken</h3>';
+  if(away.length){
+    html += '<div class="help-text">Unterwegs: ' + away.map(u=>`${u.name} (zurück ${formatDate(u.missionReturnMonth)})`).join(', ') + '</div>';
+  }
+  html += '<div class="action-row">';
+  available.forEach(u=>{
+    const picked = missionPick.has(u.id);
+    html += `<button data-action="toggle-mission-pick" data-id="${u.id}" ${picked?'class="primary"':''}>${picked?'✓ ':''}${u.name}</button>`;
+  });
+  html += '</div>';
+  html += `<div class="help-text" style="margin-top:6px;">${missionPick.size}/${available.length} ausgewählt (mindestens 2 nötig). Dauer 3-6 Monate, EXP und Gold-Ertrag richten sich nach Truppenstärke und -größe.</div>`;
+  html += `<div class="action-row" style="margin-top:8px;"><button class="primary" data-action="confirm-mission" ${missionPick.size>=2?'':'disabled'}>Losschicken</button></div>`;
+  html += '</div>';
+  return html;
+}
 function renderCampScreen(){
   let html = '<div class="map-region"><h2>Camp <span class="hint">Ausrüstung zuordnen · 💰 '+game.gold+' Gold · Lager: '+game.pool.healPotions+' Heiltränke, '+game.pool.manaPotions+' Manatränke, '+game.pool.healPotionsLarge+' große Heiltränke, '+game.pool.manaPotionsLarge+' große Manatränke</span></h2></div>';
   html += `<div class="panel-box"><h3>Trainingslager</h3><div class="action-row">
     <button data-action="train-troops">Trainieren (1 Monat)</button>
   </div><div class="help-text">Die gesamte Truppe erhält 10-30 EXP. Ein Monat vergeht dabei wie nach einem Einsatz — Belagerung, Dorf-Ereignisse und Einnahmen laufen normal weiter.</div></div>`;
+  html += renderMissionSection();
   const roster = getActivePlayerRoster();
   roster.forEach(u=>{
     const hpPct = Math.max(0, Math.round((u.hp/u.maxHp)*100));
@@ -3583,6 +3670,17 @@ function attachHandlers(){
       else if(action==='buy-potion'){ buyPotion(el.getAttribute('data-potion')); render(); }
       else if(action==='hire-mercenary'){ hireMercenary(); render(); }
       else if(action==='train-troops'){ trainTroops(); }
+      else if(action==='toggle-mission-pick'){
+        const id = el.getAttribute('data-id');
+        if(missionPick.has(id)) missionPick.delete(id); else missionPick.add(id);
+        render();
+      }
+      else if(action==='confirm-mission'){
+        if(missionPick.size>=2){
+          sendOnMission([...missionPick]);
+          missionPick = new Set();
+        }
+      }
       else if(action==='buy-weapon'){ buyWeaponTier(el.getAttribute('data-weapon'), el.getAttribute('data-tier')); render(); }
       else if(action==='buy-armor'){ buyArmorTier(el.getAttribute('data-tier')); render(); }
       else if(action==='equip-weapon'){ const u=findUnitById(el.getAttribute('data-id')); if(u) setWeaponTier(u, el.getAttribute('data-tier')); render(); }
